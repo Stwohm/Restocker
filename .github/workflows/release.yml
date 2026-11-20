@@ -39,5 +39,5 @@ jobs:
         shell: pwsh
         run: |
           gh release upload "${{ github.event.release.tag_name }}" `
-            "bin/Release/Restocker/latest.zip" `
+            "bin/Release/Restocky/latest.zip" `
             --clobber

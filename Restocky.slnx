@@ -2,5 +2,5 @@
   <Folder Name="/tests/">
     <Project Path="tests/Restocker.Tests/Restocker.Tests.csproj" />
   </Folder>
-  <Project Path="Restocker.csproj" />
+  <Project Path="Restocky.csproj" />
 </Solution>

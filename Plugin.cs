@@ -29,12 +29,12 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
 
-    private const string CommandName = "/restocker";
+    private const string CommandName = "/restocky";
 
     public static Configuration Configuration { get; private set; } = null!;
     public static Plugin Instance { get; private set; } = null!;
     public RetainerWatcher RetainerWatcher { get; private set; } = null!;
-    public readonly WindowSystem WindowSystem = new("Restocker");
+    public readonly WindowSystem WindowSystem = new("Restocky");
 
     private MainWindow MainWindow { get; }
     private ProgressWindow ProgressWindow { get; }
@@ -79,7 +79,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the Restocker window."
+            HelpMessage = "Open the Restocky window."
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;

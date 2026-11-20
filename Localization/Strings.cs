@@ -37,7 +37,7 @@ public static class Strings
     public static string LanguageNameChinese => "简体中文";
     public static string LanguageNameKorean => "한국어";
 
-    public static string WindowTitle => "Restocker";
+    public static string WindowTitle => "Restocky";
 
     // Tabs
     public static string TabReprice => T("Update prices", "価格更新", "Preise anpassen", "Mettre à jour les prix", "更新价格", "가격 갱신");

@@ -1,0 +1,17 @@
+{
+  "Author": "Stwohm (fork of yagi2/Restocker)",
+  "Name": "Restocky",
+  "Punchline": "Restocker fork: bulk reprice with price guards, history log and an optional bell auto-cycle.",
+  "Description": "Personal fork of yagi2/Restocker. Cross-retainer market workbench: reprice every listing to the live market lowest -N gil, bulk-list inventory with stack splitting. Fork additions: fixes for the duplicate-listing queue crash and stale-snapshot row mismatch, price guards (per-item floor, max drop %, outlier skip), a persistent price-history.csv, a one-click full cycle and an optional timed auto-cycle while at the summoning bell.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "retainer",
+    "market",
+    "marketboard",
+    "bulk",
+    "reprice",
+    "list"
+  ],
+  "RepoUrl": "https://github.com/Stwohm/Restocker",
+  "Changelog": "0.2.0.0 — Fork of Restocker 0.1.0.0."
+}

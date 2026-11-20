@@ -16,7 +16,7 @@ public sealed class ProgressWindow : Window
     private readonly Executor executor;
 
     public ProgressWindow(Executor executor)
-        : base("Restocker — Running##restocker-progress",
+        : base("Restocky — Running##restocky-progress",
             ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings)
     {
         this.executor = executor;

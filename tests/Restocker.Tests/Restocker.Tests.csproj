@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Restocker.csproj" />
+    <ProjectReference Include="..\..\Restocky.csproj" />
   </ItemGroup>
 
   <ItemGroup>

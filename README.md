@@ -1,3 +1,11 @@
+# Restocky — personal fork of Restocker
+
+> **Fork notice.** This is a personal fork of [yagi2/Restocker](https://github.com/yagi2/Restocker)
+> (MIT, © yagi2). Plugin name `Restocky`, command `/restocky`. Fork changes: duplicate-listing
+> queue fix, stale-snapshot guard, price guards, `price-history.csv`, one-click full cycle and an
+> optional timed auto-cycle at the bell. Timed automation is against the FFXIV ToS; use at your own risk.
+> The original README follows unchanged.
+
 # Restocker
 
 <p align="center"><img src="images/icon.png" alt="Restocker icon" width="160"></p>
