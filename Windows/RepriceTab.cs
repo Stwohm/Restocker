@@ -101,7 +101,7 @@ public sealed class RepriceTab
             {
                 if (!configuration.Snapshots.TryGetValue(key, out var s)) return;
                 expandedSections.Add("reprice-" + key);
-                ApplyMatchLowestForRetainer(s, offset: -undercut);
+                ApplyMatchLowestForRetainer(s, offset: -undercut, respectHold: true);
             };
             executor.StartFetchAll();
         }
@@ -320,7 +320,7 @@ public sealed class RepriceTab
         => $"{snapKey}#{l.ListingIndex}#{l.ItemId}{(l.IsHQ ? "h" : "n")}";
 
     /// <summary>fetch 完了後に editedPrice に「最安値 + offset」を入れる。プランには勝手に積まない。</summary>
-    private void ApplyMatchLowestForRetainer(RetainerSnapshot capturedSnap, long offset = -1)
+    private void ApplyMatchLowestForRetainer(RetainerSnapshot capturedSnap, long offset = -1, bool respectHold = false)
     {
         // Fork: the fetch reopened the sell list, so RetainerWatcher stored a NEW snapshot
         // object. The one captured at click time is stale; always use the current one.
@@ -339,6 +339,12 @@ public sealed class RepriceTab
             if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) continue;
 
             seen.Add((listing.ItemId, listing.IsHQ));
+            if (respectHold && configuration.IsHeld(listing.ItemId, listing.IsHQ))
+            {
+                editedPrice[EditKey(snap.Key, listing)] = listing.UnitPrice;
+                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' HELD (left at {listing.UnitPrice:N0})");
+                continue;
+            }
             if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
             {
                 missing.Add((listing.ItemId, listing.IsHQ, name));
@@ -438,14 +444,15 @@ public sealed class RepriceTab
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        // #, Item, Qty, Current, New, fill, +Add = 7
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 7, flags)) return;
+        // #, Item, Qty, Current, New, Hold, fill, +Add = 8
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 8, flags)) return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f);
         ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColHold, ImGuiTableColumnFlags.WidthFixed, 55);
         ImGui.TableSetupColumn("##fill", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableHeadersRow();
@@ -464,12 +471,25 @@ public sealed class RepriceTab
             ImGui.TableNextColumn();
             DrawPriceInput(EditKey(snap.Key, l));
             ImGui.TableNextColumn();
+            DrawHoldCheckbox(snap.Key, l);
+            ImGui.TableNextColumn();
             DrawFillButton(snap, l);
             ImGui.TableNextColumn();
             DrawAddPlanButton(snap, l, name);
         }
 
         ImGui.EndTable();
+    }
+
+    private void DrawHoldCheckbox(string snapshotKey, ListingEntry listing)
+    {
+        var held = configuration.IsHeld(listing.ItemId, listing.IsHQ);
+        if (ImGui.Checkbox($"##hold-{snapshotKey}-{listing.ItemId}-{listing.IsHQ}-{listing.ListingIndex}", ref held))
+        {
+            configuration.SetHeld(listing.ItemId, listing.IsHQ, held);
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.HoldTooltip);
     }
 
     /// <summary>この行で入力された価格を、同じリテイナーの他の全 listing の editedPrice にコピー。</summary>

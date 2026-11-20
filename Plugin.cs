@@ -54,7 +54,7 @@ public sealed class Plugin : IDalamudPlugin
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
-        Tracker = new TrackerHost(Framework, ChatGui, Log, PluginInterface.GetPluginConfigDirectory());
+        Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory());
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
             Tracker.Tracker.ObserveCompetitors(item, hq, offers, DateTime.UtcNow);
         Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);

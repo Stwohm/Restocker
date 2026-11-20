@@ -180,6 +180,14 @@ public static class Strings
     public static string ColListings => T("Listings", "出品本数", "Posten", "Mises", "上架数", "출품 수");
     public static string ColCurrentPrice => T("Current", "現在価格", "Aktuell", "Actuel", "当前价格", "현재가");
     public static string ColNewPrice => T("New", "新価格", "Neu", "Nouveau", "新价格", "신가격");
+    public static string ColHold => T("Hold", "保留", "Halten", "Bloquer", "锁定", "고정");
+    public static string HoldTooltip => T(
+        "Automatic cycles never change this item's price",
+        "自動サイクルはこのアイテムの価格を変更しません",
+        "Automatische Zyklen ändern den Preis dieses Artikels nie",
+        "Les cycles automatiques ne changent jamais le prix de cet objet",
+        "自动循环永不更改此物品的价格",
+        "자동 주기는 이 아이템의 가격을 변경하지 않습니다");
     public static string PriceUnknown => T("unknown", "未取得", "unbekannt", "inconnu", "未获取", "미취득");
     public static string EditedSummary => T("Editing: by item {0} / individual {1}", "編集中: アイテム単位 {0} / 個別 {1}", "Bearbeitung: pro Artikel {0} / einzeln {1}", "Édition : par article {0} / individuel {1}", "编辑中：按物品 {0} / 个别 {1}", "편집 중: 아이템 {0} / 개별 {1}");
 

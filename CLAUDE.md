@@ -35,6 +35,11 @@ Fork changes and where they live:
   the RetainerSale chat message via `Market/ChatHook.cs`). Fed by RetainerWatcher (loaded market
   container only), MarketWatcher.CompetitorsObserved (own fetches only = home world), Executor.
   Files: `listings.json`, `listings.csv`, `competitors.csv`. Sales tab shows it.
+- **AllaganMarket sales** (`Market/AllaganSaleMessage.cs`, tested): parses its plain-text sale
+  notice, resolves every exact-name item id, matches quantity/value across HQ/NQ, falls back from
+  a recent `gone` listing to `sold`, and de-duplicates paired game/plugin notices.
+- **Per-item Hold** (`Configuration.HeldItems`, `Plan/AutoRepricePlanner.cs`, tested): item+HQ/NQ
+  flags block Full/Auto repricing with a `held` history row; manual planning remains available.
 - **AutoRetainer** (`AutoRetainerIpc.cs`, `Execution/AutoRetainerGate.cs` tested): due cycle waits
   while AR is busy or a venture is ready / due within avg cycle + 2 min (when RetainerSense or
   multi mode would act), max 15 min idle wait; AR is suppressed (`AutoRetainer.SetSuppressed`)

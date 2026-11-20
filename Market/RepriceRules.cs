@@ -29,6 +29,9 @@ public enum RepriceReason
 
     /// <summary>Applied from the manual plan-then-apply table.</summary>
     Manual,
+
+    /// <summary>Automatic cycles are disabled for this item and quality.</summary>
+    Held,
 }
 
 public sealed class RepriceSettings
@@ -66,6 +69,7 @@ public static class RepriceRules
         RepriceReason.NoCompetitor => "no_competitor",
         RepriceReason.Error => "error",
         RepriceReason.Manual => "manual",
+        RepriceReason.Held => "held",
         _ => r.ToString().ToLowerInvariant(),
     };
 

@@ -46,6 +46,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Per-item minimum price (key = item id, HQ and NQ share it). Missing / 0 = no floor.</summary>
     public Dictionary<uint, long> PriceFloors { get; set; } = new();
 
+    /// <summary>Automatic-reprice holds, keyed as "itemId:hq" (HQ and NQ are independent).</summary>
+    public HashSet<string> HeldItems { get; set; } = new();
+
     /// <summary>Auto cycle interval in minutes.</summary>
     public int AutoCycleIntervalMinutes { get; set; } = 10;
 
@@ -66,6 +69,16 @@ public sealed class Configuration : IPluginConfiguration
     public List<double> RecentCycleSeconds { get; set; } = new();
 
     public long FloorFor(uint itemId) => PriceFloors.TryGetValue(itemId, out var f) ? f : 0;
+
+    public bool IsHeld(uint itemId, bool hq) => HeldItems.Contains(HeldKey(itemId, hq));
+
+    public void SetHeld(uint itemId, bool hq, bool held)
+    {
+        if (held) HeldItems.Add(HeldKey(itemId, hq));
+        else HeldItems.Remove(HeldKey(itemId, hq));
+    }
+
+    private static string HeldKey(uint itemId, bool hq) => $"{itemId}:{(hq ? 1 : 0)}";
 
     public Restocker.Market.RepriceSettings ToRepriceSettings() => new()
     {

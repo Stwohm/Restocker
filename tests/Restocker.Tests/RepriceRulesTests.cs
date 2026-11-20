@@ -134,6 +134,42 @@ public class RepriceRulesTests
     }
 
     [Fact]
+    public void Auto_planner_held_listing_has_no_action_and_writes_held_history()
+    {
+        var listings = new List<LiveListing> { new(3, 100, true, 1, 99_999) };
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(120_000, "Rival", 1) };
+
+        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default,
+            new System.DateTime(2026, 11, 20), (item, hq) => item == 100 && hq);
+
+        Assert.Empty(r.Actions);
+        var row = Assert.Single(r.NotApplied);
+        Assert.False(row.Applied);
+        Assert.Equal(RepriceReason.Held, row.Reason);
+        Assert.Equal(99_999, row.NewPrice);
+        Assert.Equal(1, r.HeldCount);
+        Assert.EndsWith(",false,held,", PriceHistoryLog.Format(row));
+    }
+
+    [Fact]
+    public void Auto_planner_hold_is_independent_for_hq_and_nq()
+    {
+        var listings = new List<LiveListing>
+        {
+            new(0, 100, false, 1, 100_000),
+            new(1, 100, true, 1, 100_000),
+        };
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(90_000, "Rival", 1) };
+
+        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default,
+            new System.DateTime(2026, 11, 20), (item, hq) => item == 100 && hq);
+
+        Assert.Single(r.Actions);
+        Assert.False(r.Actions[0].IsHQ);
+        Assert.Equal(RepriceReason.Held, Assert.Single(r.NotApplied).Reason);
+    }
+
+    [Fact]
     public void History_row_format_matches_header()
     {
         var row = new PriceHistoryRow

@@ -252,6 +252,7 @@ public sealed class AutoCycleController : IDisposable
         var stamp = DateTime.Now.ToString("HH:mm");
         LastSummary = ok
             ? $"{stamp} done: {executor.CompletedJobs} retainer(s), {executor.RepricesApplied} repriced, {executor.RepricesSkipped} unchanged/skipped"
+                + (executor.ListingsHeld > 0 ? $", {executor.ListingsHeld} held" : string.Empty)
             : $"{stamp} stopped: {executor.StatusMessage}";
         log.Information($"[Restocker] cycle finished: {LastSummary}");
 

@@ -96,6 +96,7 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>Fork: per-run counters for the full / auto cycle summary.</summary>
     public int RepricesApplied { get; private set; }
     public int RepricesSkipped { get; private set; }
+    public int ListingsHeld { get; private set; }
 
     /// <summary>Fork: every price actually written in this run, for the chat summary.</summary>
     public List<(string Retainer, uint ItemId, bool IsHq, long OldPrice, long NewPrice)> AppliedReprices { get; } = new();
@@ -404,6 +405,7 @@ public sealed unsafe class Executor : IDisposable
         RepricesApplied = 0;
         AppliedReprices.Clear();
         RepricesSkipped = 0;
+        ListingsHeld = 0;
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
         // smart-start: 既に対象リテイナーの SellList を開いている場合は
@@ -870,7 +872,10 @@ public sealed unsafe class Executor : IDisposable
                 : null,
             configuration.FloorFor,
             configuration.ToRepriceSettings(),
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            configuration.IsHeld);
+
+        ListingsHeld += plan.HeldCount;
 
         foreach (var row in plan.NotApplied)
         {

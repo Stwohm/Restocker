@@ -62,6 +62,12 @@ public sealed class ListingRecord
     /// <summary>Gil received according to the sale message (after fees). 0 = unknown.</summary>
     public long SoldTotalGil { get; set; }
 
+    /// <summary>When Restocky received the sale message; distinct from EndedUtc for gone→sold recovery.</summary>
+    public DateTime? SoldRecordedUtc { get; set; }
+
+    /// <summary>Source that reported the sale: game or allaganmarket.</summary>
+    public string SoldSource { get; set; } = string.Empty;
+
     public double? DaysListed => EndedUtc is { } e ? (e - FirstSeenUtc).TotalDays : null;
 }
 
@@ -75,6 +81,14 @@ public sealed class ListingTracker
     public const string Active = "active";
     public const string Sold = "sold";
     public const string Gone = "gone";
+    public const string GameSaleSource = "game";
+    public const string AllaganMarketSaleSource = "allaganmarket";
+
+    /// <summary>Retainer sale proceeds after the market's five-percent fee.</summary>
+    public const decimal SaleNetRate = 0.95m;
+
+    private static readonly TimeSpan GoneSaleWindow = TimeSpan.FromHours(72);
+    private static readonly TimeSpan DuplicateSaleWindow = TimeSpan.FromMinutes(10);
 
     /// <summary>A listing must stay missing this long (across observations) before it is closed as gone.</summary>
     public TimeSpan GoneAfter { get; set; } = TimeSpan.FromSeconds(60);
@@ -207,18 +221,81 @@ public sealed class ListingTracker
     /// </summary>
     public ListingRecord? OnSale(uint itemId, bool hq, long totalGil, DateTime nowUtc)
     {
+        if (IsDuplicateSale(new[] { itemId }, totalGil, nowUtc, GameSaleSource)) return null;
         var candidates = ActiveFor(itemId, hq).ToList();
         if (candidates.Count == 0) return null;
         var rec = totalGil > 0
-            ? candidates.OrderBy(r => Math.Abs(r.LastPrice * r.Quantity * 0.95 - totalGil)).First()
+            ? candidates.OrderBy(r => Difference(r, totalGil)).First()
             : candidates.First();
-        rec.Outcome = Sold;
-        rec.EndedUtc = nowUtc;
-        rec.SoldTotalGil = totalGil;
-        rec.MissingSinceUtc = null;
-        Dirty = true;
+        MarkSold(rec, totalGil, nowUtc, keepEndedUtc: false, GameSaleSource);
         return rec;
     }
+
+    /// <summary>
+    /// AllaganMarket sale message. Item quality is unknown, but stack quantity is known. Active
+    /// listings are preferred; a recent unclassified gone listing is the fallback.
+    /// </summary>
+    public ListingRecord? OnAllaganSale(
+        IReadOnlyCollection<uint> candidateItemIds,
+        int quantity,
+        long netGil,
+        DateTime nowUtc)
+    {
+        if (candidateItemIds.Count == 0 || quantity <= 0 || netGil <= 0) return null;
+        var ids = candidateItemIds as HashSet<uint> ?? candidateItemIds.ToHashSet();
+        if (IsDuplicateSale(ids, netGil, nowUtc, AllaganMarketSaleSource)) return null;
+
+        var active = Records.Where(r => r.Outcome == Active && ids.Contains(r.ItemId) && r.Quantity == quantity);
+        var rec = BestWithinTolerance(active, netGil);
+        if (rec != null)
+        {
+            MarkSold(rec, netGil, nowUtc, keepEndedUtc: false, AllaganMarketSaleSource);
+            return rec;
+        }
+
+        var gone = Records.Where(r => r.Outcome == Gone && r.SoldTotalGil == 0
+            && ids.Contains(r.ItemId) && r.Quantity == quantity && r.EndedUtc is { } ended
+            && nowUtc >= ended && nowUtc - ended <= GoneSaleWindow);
+        rec = BestWithinTolerance(gone, netGil);
+        if (rec == null) return null;
+        MarkSold(rec, netGil, nowUtc, keepEndedUtc: true, AllaganMarketSaleSource);
+        return rec;
+    }
+
+    public static long NetFromGross(long grossGil) => grossGil <= 0 ? 0 : (long)(grossGil * SaleNetRate);
+
+    private static ListingRecord? BestWithinTolerance(IEnumerable<ListingRecord> candidates, long netGil)
+    {
+        var rec = candidates.OrderBy(r => Difference(r, netGil)).FirstOrDefault();
+        return rec != null && Difference(rec, netGil) <= Tolerance(netGil) ? rec : null;
+    }
+
+    private bool IsDuplicateSale(IEnumerable<uint> itemIds, long netGil, DateTime nowUtc, string source)
+    {
+        if (netGil <= 0) return false;
+        var ids = itemIds as ISet<uint> ?? itemIds.ToHashSet();
+        return Records.Any(r => r.Outcome == Sold && ids.Contains(r.ItemId) && r.SoldTotalGil > 0
+            && !string.IsNullOrEmpty(r.SoldSource) && r.SoldSource != source
+            && r.SoldRecordedUtc is { } recorded && nowUtc >= recorded
+            && nowUtc - recorded <= DuplicateSaleWindow
+            && Math.Abs((decimal)r.SoldTotalGil - netGil) <= Tolerance(netGil));
+    }
+
+    private void MarkSold(ListingRecord rec, long totalGil, DateTime nowUtc, bool keepEndedUtc, string source)
+    {
+        rec.Outcome = Sold;
+        if (!keepEndedUtc) rec.EndedUtc = nowUtc;
+        rec.SoldTotalGil = totalGil;
+        rec.SoldRecordedUtc = nowUtc;
+        rec.SoldSource = source;
+        rec.MissingSinceUtc = null;
+        Dirty = true;
+    }
+
+    private static decimal Difference(ListingRecord rec, long netGil)
+        => Math.Abs(rec.LastPrice * rec.Quantity * SaleNetRate - netGil);
+
+    private static decimal Tolerance(long netGil) => Math.Max(2m, netGil * 0.02m);
 
     // ---------------- persistence / export ----------------
 

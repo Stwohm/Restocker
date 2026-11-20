@@ -130,6 +130,128 @@ public class ListingTrackerTests
     }
 
     [Fact]
+    public void Allagan_sale_matches_candidate_id_quantity_either_quality_and_closest_value()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(
+            new LiveListing(0, 7, false, 2, 10_000),
+            new LiveListing(1, 8, true, 2, 10_100),
+            new LiveListing(2, 8, false, 1, 20_200)), Name, T0);
+
+        var rec = t.OnAllaganSale(new uint[] { 7, 8 }, 2, 19_190, T0.AddMinutes(1));
+
+        Assert.NotNull(rec);
+        Assert.Equal((uint)8, rec!.ItemId);
+        Assert.True(rec.IsHq);
+        Assert.Equal(ListingTracker.Sold, rec.Outcome);
+        Assert.Equal(19_190, rec.SoldTotalGil);
+    }
+
+    [Fact]
+    public void Allagan_sale_rejects_wrong_quantity_or_value_outside_tolerance()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, false, 2, 10_000)), Name, T0);
+
+        Assert.Null(t.OnAllaganSale(new uint[] { 7 }, 1, 19_000, T0.AddMinutes(1)));
+        Assert.Null(t.OnAllaganSale(new uint[] { 7 }, 2, 18_000, T0.AddMinutes(1)));
+        Assert.Equal(ListingTracker.Active, t.Records[0].Outcome);
+    }
+
+    [Fact]
+    public void Allagan_sale_converts_recent_gone_listing_to_sold_and_keeps_end_time()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, true, 3, 10_000)), Name, T0);
+        t.ObserveRetainer(K, RetainerA, L(), Name, T0.AddHours(1), authoritative: true);
+        var ended = t.Records[0].EndedUtc;
+
+        var rec = t.OnAllaganSale(new uint[] { 7 }, 3, 28_500, T0.AddHours(2));
+
+        Assert.Same(t.Records[0], rec);
+        Assert.Equal(ListingTracker.Sold, rec!.Outcome);
+        Assert.Equal(ended, rec.EndedUtc);
+        Assert.Equal(T0.AddHours(2), rec.SoldRecordedUtc);
+    }
+
+    [Fact]
+    public void Allagan_sale_prefers_an_acceptable_active_listing_over_a_closer_gone_listing()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, false, 1, 10_000)), Name, T0);
+        t.ObserveRetainer(K, RetainerA, L(), Name, T0.AddHours(1), authoritative: true);
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(1, 7, true, 1, 10_100)), Name, T0.AddHours(2));
+
+        var rec = t.OnAllaganSale(new uint[] { 7 }, 1, 9_500, T0.AddHours(3));
+
+        Assert.NotNull(rec);
+        Assert.True(rec!.IsHq);
+        Assert.Equal(ListingTracker.Gone, t.Records.Single(r => !r.IsHq).Outcome);
+    }
+
+    [Fact]
+    public void Allagan_sale_does_not_reopen_gone_listing_older_than_72_hours()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, false, 1, 10_000)), Name, T0);
+        t.ObserveRetainer(K, RetainerA, L(), Name, T0.AddHours(1), authoritative: true);
+
+        Assert.Null(t.OnAllaganSale(new uint[] { 7 }, 1, 9_500, T0.AddHours(74)));
+        Assert.Equal(ListingTracker.Gone, t.Records[0].Outcome);
+    }
+
+    [Fact]
+    public void Two_same_source_allaganmarket_messages_close_two_identical_listings()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(
+            new LiveListing(0, 7, false, 1, 10_000),
+            new LiveListing(1, 7, false, 1, 10_000)), Name, T0);
+
+        Assert.NotNull(t.OnAllaganSale(new uint[] { 7 }, 1, 9_500, T0.AddMinutes(1)));
+        Assert.NotNull(t.OnAllaganSale(new uint[] { 7 }, 1, 9_500, T0.AddMinutes(2)));
+
+        Assert.Equal(2, t.Records.Count(r => r.Outcome == ListingTracker.Sold));
+        Assert.All(t.Records, r => Assert.Equal(ListingTracker.AllaganMarketSaleSource, r.SoldSource));
+    }
+
+    [Fact]
+    public void Game_then_allaganmarket_for_one_sale_closes_one_listing()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(
+            new LiveListing(0, 7, false, 1, 10_000),
+            new LiveListing(1, 7, false, 1, 10_000)), Name, T0);
+
+        Assert.NotNull(t.OnSale(7, false, 9_500, T0.AddMinutes(1)));
+        Assert.Null(t.OnAllaganSale(new uint[] { 7 }, 1, 9_501, T0.AddMinutes(5)));
+
+        Assert.Single(t.Records, r => r.Outcome == ListingTracker.Sold);
+        Assert.Single(t.Records, r => r.Outcome == ListingTracker.Active);
+        Assert.Equal(ListingTracker.GameSaleSource, t.Records.Single(r => r.Outcome == ListingTracker.Sold).SoldSource);
+    }
+
+    [Fact]
+    public void Allaganmarket_then_game_for_one_sale_closes_one_listing()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(
+            new LiveListing(0, 7, true, 1, 10_000),
+            new LiveListing(1, 7, true, 1, 10_000)), Name, T0);
+
+        Assert.NotNull(t.OnAllaganSale(new uint[] { 7 }, 1, 9_500, T0.AddMinutes(1)));
+        Assert.Null(t.OnSale(7, true, 9_499, T0.AddMinutes(5)));
+
+        Assert.Single(t.Records, r => r.Outcome == ListingTracker.Sold);
+        Assert.Single(t.Records, r => r.Outcome == ListingTracker.Active);
+        Assert.Equal(ListingTracker.AllaganMarketSaleSource, t.Records.Single(r => r.Outcome == ListingTracker.Sold).SoldSource);
+    }
+
+    [Fact]
+    public void Gross_gil_is_converted_to_net_with_named_sale_rate()
+        => Assert.Equal(71_952, ListingTracker.NetFromGross(75_739));
+
+    [Fact]
     public void Competitors_on_another_retainers_listing_and_hq_are_separate()
     {
         var t = new ListingTracker();
@@ -147,11 +269,13 @@ public class ListingTrackerTests
             var t = new ListingTracker();
             t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 100, false, 1, 85_000)), Name, T0);
             t.ObserveCompetitors(100, false, new[] { new MarketOffer(84_999, "Rival", 1) }, T0);
+            t.OnSale(100, false, 80_750, T0.AddHours(1));
             Assert.True(t.Save(dir));
             Assert.False(t.Dirty);
 
             var back = ListingTracker.Load(Path.Combine(dir, "listings.json"));
             Assert.Equal("Rival", back.Records[0].Competitors.Keys.Single());
+            Assert.Equal(ListingTracker.GameSaleSource, back.Records[0].SoldSource);
 
             var listings = File.ReadAllLines(Path.Combine(dir, "listings.csv"));
             Assert.Equal(ListingTracker.ListingsHeader, listings[0].TrimStart('﻿'));

@@ -21,6 +21,8 @@ public static class AutoRepricePlanner
 
         /// <summary>Competitor listings ignored as bait, one notice per (item, hq).</summary>
         public List<BaitNotice> Baits { get; } = new();
+
+        public int HeldCount { get; internal set; }
     }
 
     /// <param name="competitors">
@@ -34,11 +36,30 @@ public static class AutoRepricePlanner
         Func<uint, bool, IReadOnlyList<MarketOffer>?> competitors,
         Func<uint, long> floorFor,
         RepriceSettings settings,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        Func<uint, bool, bool>? isHeld = null)
     {
         var result = new Result();
         foreach (var l in listings)
         {
+            if (isHeld?.Invoke(l.ItemId, l.IsHQ) == true)
+            {
+                result.HeldCount++;
+                result.NotApplied.Add(new PriceHistoryRow
+                {
+                    UtcTime = nowUtc,
+                    Retainer = retainerName,
+                    Slot = l.Slot,
+                    ItemId = l.ItemId,
+                    Hq = l.IsHQ,
+                    Qty = l.Quantity,
+                    OldPrice = l.UnitPrice,
+                    NewPrice = l.UnitPrice,
+                    Applied = false,
+                    Reason = RepriceReason.Held,
+                });
+                continue;
+            }
             var offers = competitors(l.ItemId, l.IsHQ);
             RepriceDecision d;
             var undercutters = string.Empty;
