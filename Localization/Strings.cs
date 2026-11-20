@@ -188,6 +188,19 @@ public static class Strings
         "Les cycles automatiques ne changent jamais le prix de cet objet",
         "自动循环永不更改此物品的价格",
         "자동 주기는 이 아이템의 가격을 변경하지 않습니다");
+
+    // Fork: undercutters tooltip in the Update prices table.
+    public static string UndercuttersNoScan => T("No market scan yet", "マーケット情報は未取得", "Noch keine Marktabfrage", "Marché pas encore consulté", "尚未扫描市场", "아직 시장을 조회하지 않았습니다");
+    public static string UndercuttersNone => T("Nobody cheaper in last scan", "前回取得時により安い出品はありませんでした", "Keine günstigeren Angebote bei der letzten Abfrage", "Aucune offre moins chère au dernier relevé", "上次扫描没有更便宜的挂单", "마지막 조회에서 더 저렴한 매물이 없었습니다");
+    public static string UndercuttersHeader => T("Cheaper than you ({0:N0}): {1:N0} listings, {2:N0} units", "自分の価格（{0:N0}）より安い出品：{1:N0}件、計{2:N0}個", "Günstiger als dein Preis ({0:N0}): {1:N0} Angebote, {2:N0} Stück", "Moins cher que votre prix ({0:N0}) : {1:N0} offres, {2:N0} unités", "低于你的价格（{0:N0}）：{1:N0} 个挂单，共 {2:N0} 件", "내 가격({0:N0})보다 저렴한 매물: {1:N0}건, 총 {2:N0}개");
+    public static string UndercuttersUnknownPrice => T("Your price unknown", "自分の価格は不明", "Dein Preis ist unbekannt", "Votre prix est inconnu", "你的价格未知", "내 가격을 알 수 없습니다");
+    public static string UndercuttersSeller => T("Seller", "出品者", "Verkäufer", "Vendeur", "卖家", "판매자");
+    public static string UndercuttersQuantity => T("Qty", "個数", "Anz.", "Qté", "数量", "수량");
+    public static string UndercuttersUnitPrice => T("Unit price", "単価", "Stückpreis", "Prix unitaire", "单价", "개당 가격");
+    public static string UndercuttersMore => T("+{0:N0} more", "ほか{0:N0}件", "+{0:N0} weitere", "+{0:N0} de plus", "另有 {0:N0} 个挂单", "외 {0:N0}건");
+    public static string UndercuttersScannedNow => T("scanned just now", "たった今取得", "gerade abgefragt", "relevé à l’instant", "刚刚扫描", "방금 조회함");
+    public static string UndercuttersScannedMinutes => T("scanned {0:N0} min ago", "{0:N0}分前に取得", "vor {0:N0} Min. abgefragt", "relevé il y a {0:N0} min", "{0:N0} 分钟前扫描", "{0:N0}분 전 조회함");
+
     public static string PriceUnknown => T("unknown", "未取得", "unbekannt", "inconnu", "未获取", "미취득");
     public static string EditedSummary => T("Editing: by item {0} / individual {1}", "編集中: アイテム単位 {0} / 個別 {1}", "Bearbeitung: pro Artikel {0} / einzeln {1}", "Édition : par article {0} / individuel {1}", "编辑中：按物品 {0} / 个别 {1}", "편집 중: 아이템 {0} / 개별 {1}");
 

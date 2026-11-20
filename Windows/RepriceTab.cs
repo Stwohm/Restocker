@@ -444,13 +444,14 @@ public sealed class RepriceTab
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        // #, Item, Qty, Current, New, Hold, fill, +Add = 8
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 8, flags)) return;
+        // Fork: #, Item, Qty, Current, undercutters icon, New, Hold, fill, +Add = 9
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 9, flags)) return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f);
         ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn("##cheaper", ImGuiTableColumnFlags.WidthFixed, 24);
         ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableSetupColumn(Strings.ColHold, ImGuiTableColumnFlags.WidthFixed, 55);
         ImGui.TableSetupColumn("##fill", ImGuiTableColumnFlags.WidthFixed, 70);
@@ -469,6 +470,8 @@ public sealed class RepriceTab
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(l.UnitPrice == 0 ? Strings.PriceUnknown : l.UnitPrice.ToString("N0"));
             ImGui.TableNextColumn();
+            DrawUndercutters(l);
+            ImGui.TableNextColumn();
             DrawPriceInput(EditKey(snap.Key, l));
             ImGui.TableNextColumn();
             DrawHoldCheckbox(snap.Key, l);
@@ -479,6 +482,66 @@ public sealed class RepriceTab
         }
 
         ImGui.EndTable();
+    }
+
+    // Fork: display competitors from the last scan for this item and quality.
+    private void DrawUndercutters(ListingEntry listing)
+    {
+        if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
+        {
+            ImGui.TextDisabled("(!)");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.UndercuttersNoScan);
+            return;
+        }
+
+        var offers = marketCache.GetOffers(listing.ItemId, listing.IsHQ);
+        var price = listing.UnitPrice;
+        // The cache sorts by unit price, so the first offer is enough to color the icon.
+        if (offers.Count > 0 && offers[0].Price < price)
+            ImGui.TextColored(new System.Numerics.Vector4(0.95f, 0.8f, 0.4f, 1f), "(!)");
+        else
+            ImGui.TextDisabled("(!)");
+
+        if (!ImGui.IsItemHovered()) return;
+
+        ImGui.BeginTooltip();
+        var summary = UndercutSummary.Create(offers, price);
+        if (price == 0)
+            ImGui.TextUnformatted(Strings.UndercuttersUnknownPrice);
+        else if (summary.ListingCount == 0)
+            ImGui.TextUnformatted(Strings.UndercuttersNone);
+        else
+            ImGui.TextUnformatted(string.Format(Strings.UndercuttersHeader, price, summary.ListingCount, summary.UnitCount));
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.NoSavedSettings;
+        if (summary.Offers.Count > 0 && ImGui.BeginTable("##undercutters", 3, flags))
+        {
+            ImGui.TableSetupColumn(Strings.UndercuttersSeller);
+            ImGui.TableSetupColumn(Strings.UndercuttersQuantity);
+            ImGui.TableSetupColumn(Strings.UndercuttersUnitPrice);
+            ImGui.TableHeadersRow();
+            foreach (var offer in summary.Offers)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(string.IsNullOrEmpty(offer.Seller) ? "?" : offer.Seller);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(offer.Quantity.ToString("N0"));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(offer.Price.ToString("N0"));
+            }
+            ImGui.EndTable();
+        }
+
+        if (summary.RemainingCount > 0)
+            ImGui.TextUnformatted(string.Format(Strings.UndercuttersMore, summary.RemainingCount));
+        if (marketCache.UpdatedUtc(listing.ItemId, listing.IsHQ) is { } updated)
+        {
+            var minutes = (System.DateTime.UtcNow - updated).TotalMinutes;
+            ImGui.TextDisabled(minutes < 1 ? Strings.UndercuttersScannedNow
+                : string.Format(Strings.UndercuttersScannedMinutes, (int)minutes));
+        }
+        ImGui.EndTooltip();
     }
 
     private void DrawHoldCheckbox(string snapshotKey, ListingEntry listing)
