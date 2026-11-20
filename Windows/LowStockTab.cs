@@ -183,7 +183,7 @@ public sealed class LowStockTab
             if (!can) ImGui.EndDisabled();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(!bellOpen ? "open the summoning bell first"
-                    : userPrices ? $"Nothing listed: lists one, opens the game's price window and waits for you; the rest (up to {to}) follow at your price"
+                    : userPrices ? $"Nothing listed: opens the game's 'Put up for sale' window and waits for your price; the rest (up to {to}) follow at that price"
                     : $"List up to {to} units now (retainer inventory, then bag, then saddlebag) at the price on this row");
 
             ImGui.TableNextColumn();
@@ -200,14 +200,16 @@ public sealed class LowStockTab
 
     private void RestockWithHandover(LowStockEntry e, int target)
     {
-        var actions = service.PlanRestock(e, target, Executor.HandoverPlaceholderPrice);
+        // Price 1 only so the planner produces the listing layout; the user prices the first one in the
+        // game's sale window and the rest follow at that price.
+        var actions = service.PlanRestock(e, target, 1);
         if (actions.Count == 0)
         {
             var why = service.Sources(e.ItemId, e.IsHq).Count == 0 ? "none in retainer inventories / bag / saddlebag" : "no free market slot";
             lastMessage = $"{ItemName(e.ItemId)}: nothing to list: {why}";
             return;
         }
-        lastMessage = $"{ItemName(e.ItemId)}: listing one, then the game's price window opens for you";
+        lastMessage = $"{ItemName(e.ItemId)}: opening the game's sale window for you";
         Plugin.ChatPrint(lastMessage);
         executor.StartRestockWithHandover(actions);
     }

@@ -188,30 +188,28 @@ public sealed unsafe class Executor : IDisposable
 
     // ---------------- Fork: restock with price handover ----------------
 
-    /// <summary>Price used for the one listing the user prices by hand. Nobody buys at this.</summary>
-    public const long HandoverPlaceholderPrice = 99_999_999;
-
     private sealed class Handover
     {
         public required string RetainerName { get; init; }
         public required uint ItemId { get; init; }
         public required bool IsHq { get; init; }
+        public required int Quantity { get; init; }
         public required List<PlannedAction> SameRetainerFollowUps { get; init; }
         public required List<PlannedAction> AllFollowUps { get; init; }
-        public int Row;
-        public int RowCount;
+        public HashSet<int> SlotsBefore { get; } = new();
+        public bool Staged;
         public bool Done;
     }
 
     private Handover? handover;
 
-    /// <summary>True while the game's price dialog is waiting for the user.</summary>
+    /// <summary>True while the game's sale window is waiting for the user.</summary>
     public bool WaitingForUserPrice => State == ExecutionState.HandoverWaitUser;
 
     /// <summary>
-    /// Fork: list the first planned listing at <see cref="HandoverPlaceholderPrice"/>, open its
-    /// "Adjust price" dialog and leave it to the user. When the dialog closes, the price the user
-    /// set is read back and used for the remaining listings.
+    /// Fork: open the game's own "Put up for sale" window for the first planned listing (quantity
+    /// pre-set, price left to the user) and wait. When the user confirms, the new listing's price is
+    /// read back and used for the remaining listings. Nothing is listed by Restocky until then.
     /// </summary>
     public void StartRestockWithHandover(List<PlannedAction> actions)
     {
@@ -219,7 +217,6 @@ public sealed unsafe class Executor : IDisposable
         if (actions.Count == 0) return;
         var first = actions[0];
         if (!configuration.Snapshots.TryGetValue(first.RetainerKey, out var snap)) return;
-        first.UnitPrice = HandoverPlaceholderPrice;
         var rest = actions.Skip(1).ToList();
         foreach (var a in rest) a.UnitPrice = 0; // set once the user has priced the first one
         handover = new Handover
@@ -227,36 +224,76 @@ public sealed unsafe class Executor : IDisposable
             RetainerName = snap.RetainerName,
             ItemId = first.ItemId,
             IsHq = first.IsHQ,
+            Quantity = first.Quantity,
             SameRetainerFollowUps = rest.Where(a => a.RetainerKey == first.RetainerKey).ToList(),
             AllFollowUps = rest,
         };
-        var others = rest.Where(a => a.RetainerKey != first.RetainerKey);
-        StartApplyActions(new[] { first }.Concat(others));
+
+        jobs.Clear();
+        jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = new List<PlannedAction>() });
+        foreach (var grp in rest.Where(a => a.RetainerKey != first.RetainerKey).GroupBy(a => a.RetainerKey))
+        {
+            if (!configuration.Snapshots.TryGetValue(grp.Key, out var s2)) continue;
+            jobs.Add(new RetainerVisitJob { RetainerName = s2.RetainerName, Actions = grp.ToList() });
+        }
+        Begin(ExecutionMode.ApplyActions);
         if (!IsRunning) handover = null;
     }
 
     private bool HandoverDueForCurrentJob()
         => handover is { Done: false } h && jobs.Count > jobCursor && jobs[jobCursor].RetainerName == h.RetainerName;
 
-    private void TickHandoverClickRow()
+    /// <summary>Find the item in the bag (or this retainer's inventory) and right-click it via the agent.</summary>
+    private void TickHandoverOpenContext()
     {
         var h = handover!;
-        if (h.Row >= h.RowCount)
+        var im = InventoryManager.Instance();
+        if (im == null) { FailHandover("inventory not available"); return; }
+
+        h.SlotsBefore.Clear();
+        foreach (var l in ReadLiveListings()) h.SlotsBefore.Add(l.Slot);
+
+        InventoryType[] order =
         {
-            Plugin.ChatPrint("could not find the new listing to price; it is listed at the placeholder price, fix it by hand.");
-            FinishHandover(price: 0);
+            InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
+            InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
+            InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6, InventoryType.RetainerPage7,
+        };
+        foreach (var t in order)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var it = c->GetInventorySlot(i);
+                if (it == null || it->ItemId != h.ItemId) continue;
+                if (((it->Flags & InventoryItem.ItemFlags.HighQuality) != 0) != h.IsHq) continue;
+                var agent = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentInventoryContext.Instance();
+                if (agent == null) { FailHandover("inventory context not available"); return; }
+                // Owner addon id 0, as MarketDumper does (upstream passed RetainerSellList's id and
+                // found the "Put up for sale" entry unreliable).
+                agent->OpenForItemSlot(t, i, 0, 0);
+                log.Information($"[Restocker] handover: context menu for item={h.ItemId} at {t}#{i}");
+                State = ExecutionState.HandoverAwaitContext;
+                waitingSince = DateTime.UtcNow;
+                Throttle();
+                return;
+            }
+        }
+
+        // Only in the saddlebag: move one stack to the bag first (saddlebag items have no sale entry).
+        if (!h.Staged && StageOneSaddleSlot(h.ItemId, h.IsHq))
+        {
+            h.Staged = true;
+            Wait(TimeSpan.FromSeconds(1.5));
             return;
         }
-        ClickListingSlot(h.Row);
-        State = ExecutionState.HandoverAwaitContext;
-        waitingSince = DateTime.UtcNow;
-        Throttle();
+        FailHandover("item not found in bag, this retainer's inventory or saddlebag");
     }
 
     private void TickHandoverAwaitContext()
     {
-        var h = handover!;
-        if (AddonHelper.IsOpen("ContextMenu") && ContextMenuHelper.ClickEntry(AddonText.IsAdjustPriceEntry))
+        if (AddonHelper.IsOpen("ContextMenu") && ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry))
         {
             State = ExecutionState.HandoverAwaitDialog;
             waitingSince = DateTime.UtcNow;
@@ -265,10 +302,9 @@ public sealed unsafe class Executor : IDisposable
         }
         if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(3))
         {
+            var entries = AddonHelper.IsOpen("ContextMenu") ? string.Join(" | ", ContextMenuHelper.EnumerateEntries()) : "(no menu)";
             if (AddonHelper.IsOpen("ContextMenu")) ContextMenuHelper.Close();
-            h.Row++;
-            State = ExecutionState.HandoverClickRow;
-            Throttle();
+            FailHandover($"'Put up for sale' entry not found ({entries})");
         }
     }
 
@@ -278,57 +314,41 @@ public sealed unsafe class Executor : IDisposable
         var addon = AddonHelper.GetVisible("RetainerSell");
         if (addon == null)
         {
-            if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(6))
-            {
-                h.Row++;
-                State = ExecutionState.HandoverClickRow;
-                Throttle();
-            }
+            if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(6)) FailHandover("sale window did not open");
             return;
         }
-        var sell = (AddonRetainerSell*)addon;
-        var (id, hq) = ResolveItemFromDialogName(ReadNodeText(sell->ItemName));
-        // Item + HQ is enough: the handover only runs when nothing of this item was listed.
-        // (A price-filler plugin may already have replaced the placeholder in the dialog.)
-        if (id == h.ItemId && hq == h.IsHq)
-        {
-            StatusMessage = "set the price in the game window and confirm";
-            Plugin.ChatPrint("set the price in the game's price window and confirm; Restocky lists the rest at that price.");
-            State = ExecutionState.HandoverWaitUser;
-            return;
-        }
-        Callback.Fire(addon, true, -1);
-        h.Row++;
-        State = ExecutionState.HandoverAwaitSellList;
-        Throttle();
+        // Quantity only; the price is the user's (event 3 = quantity, as upstream's sell dialog path).
+        Callback.Fire(addon, true, 3, h.Quantity);
+        StatusMessage = "set the price in the game's sale window and confirm";
+        Plugin.ChatPrint($"set the price in the sale window and confirm; Restocky lists the rest ({h.AllFollowUps.Count}) at that price.");
+        State = ExecutionState.HandoverWaitUser;
     }
 
-    private void TickHandoverAwaitSellList()
-    {
-        // A price-filler plugin may have opened Compare prices on the wrong row; close it too.
-        var sr = AddonHelper.GetVisible("ItemSearchResult");
-        if (sr != null) { Callback.Fire(sr, true, -1); return; }
-        if (AddonHelper.IsOpen("RetainerSell") || !AddonHelper.IsOpen("RetainerSellList")) return;
-        State = ExecutionState.HandoverClickRow;
-        Wait(TimeSpan.FromMilliseconds(400));
-    }
-
-    /// <summary>The dialog is the user's. When it closes, read back the price of our listing.</summary>
+    /// <summary>The window is the user's. When it closes, look for the new listing and read its price.</summary>
     private void TickHandoverWaitUser()
     {
         if (AddonHelper.IsOpen("RetainerSell") || AddonHelper.IsOpen("ItemSearchResult")) return;
         if (!AddonHelper.IsOpen("RetainerSellList")) return;
         var h = handover!;
-        var listing = ReadLiveListings().FirstOrDefault(l => l.ItemId == h.ItemId && l.IsHQ == h.IsHq);
-        var price = listing.ItemId == 0 ? 0 : listing.UnitPrice;
-        if (price <= 0 || price == HandoverPlaceholderPrice)
+        var added = ReadLiveListings().FirstOrDefault(l => !h.SlotsBefore.Contains(l.Slot) && l.ItemId == h.ItemId && l.IsHQ == h.IsHq);
+        if (added.ItemId == 0)
         {
-            Plugin.ChatPrint($"price was not set; the listing stays at {HandoverPlaceholderPrice:N0}. Remaining listings skipped.");
+            // The server may need a moment to show the new listing.
+            waitingSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - waitingSince.Value < TimeSpan.FromSeconds(3)) return;
+            Plugin.ChatPrint("sale window closed without a new listing; nothing else listed.");
             FinishHandover(price: 0);
             return;
         }
-        Plugin.ChatPrint($"price {price:N0} picked up; listing {h.AllFollowUps.Count} more.");
-        FinishHandover(price);
+        Plugin.ChatPrint($"price {added.UnitPrice:N0} picked up; listing {h.AllFollowUps.Count} more.");
+        FinishHandover(added.UnitPrice);
+    }
+
+    private void FailHandover(string why)
+    {
+        log.Warning($"[Restocker] handover failed: {why}");
+        Plugin.ChatPrint($"List & price: {why}. Nothing was listed.");
+        FinishHandover(price: 0);
     }
 
     private void FinishHandover(long price)
@@ -336,6 +356,7 @@ public sealed unsafe class Executor : IDisposable
         var h = handover!;
         h.Done = true;
         StatusMessage = null;
+        waitingSince = null;
         foreach (var a in h.AllFollowUps) a.UnitPrice = price; // 0 => ExecuteDirectListing skips them
         if (price > 0)
         {
@@ -454,11 +475,10 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.AwaitingSelectStringAfterSell: TickAwaitingSelectStringAfterSell(); break;
                 case ExecutionState.DismissingRetainer: TickDismissingRetainer(); break;
                 case ExecutionState.AwaitingDismissed: TickAwaitingDismissed(); break;
-                case ExecutionState.HandoverClickRow: TickHandoverClickRow(); break;
+                case ExecutionState.HandoverOpenContext: TickHandoverOpenContext(); break;
                 case ExecutionState.HandoverAwaitContext: TickHandoverAwaitContext(); break;
                 case ExecutionState.HandoverAwaitDialog: TickHandoverAwaitDialog(); break;
                 case ExecutionState.HandoverWaitUser: TickHandoverWaitUser(); break;
-                case ExecutionState.HandoverAwaitSellList: TickHandoverAwaitSellList(); break;
             }
         }
         catch (Exception ex)
@@ -748,8 +768,41 @@ public sealed unsafe class Executor : IDisposable
 
     // ---------------- Fork: job entry / fetch phase / live reads ----------------
 
+    private bool jobObserved;
+
+    /// <summary>"Ascendant Twine [RetainerA]: 84,999 → 84,998 ↓" for every price written this run.</summary>
+    public void PrintRepriceLines()
+    {
+        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+        foreach (var r in AppliedReprices)
+        {
+            var name = sheet.TryGetRow(r.ItemId, out var row) ? row.Name.ExtractText() : $"#{r.ItemId}";
+            var arrow = r.NewPrice < r.OldPrice ? "↓" : "↑";
+            Plugin.ChatPrint($"  {name}{(r.IsHq ? " (HQ)" : "")} [{r.Retainer}]: {r.OldPrice:N0} → {r.NewPrice:N0} {arrow}");
+        }
+    }
+
+    private void ObserveListingsNow()
+    {
+        try
+        {
+            var im = InventoryManager.Instance();
+            var market = im != null ? im->GetInventoryContainer(InventoryType.RetainerMarket) : null;
+            if (market == null || !market->IsLoaded) return;
+            var key = ActiveRetainerKey();
+            if (string.IsNullOrEmpty(key)) return;
+            var items = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+            Plugin.Instance?.Tracker.Tracker.ObserveRetainer(
+                key, jobs[jobCursor].RetainerName, ReadLiveListings(),
+                id => items.TryGetRow(id, out var row) ? row.Name.ExtractText() : $"#{id}",
+                DateTime.UtcNow, authoritative: true);
+        }
+        catch (Exception ex) { log.Warning(ex, "[Restocker] listing observation failed"); }
+    }
+
     private void EnterJob()
     {
+        jobObserved = false;
         currentJobActions.Clear();
         foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
         fetchRows = null;
@@ -869,6 +922,14 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickPerformingAction()
     {
+        // Fork: one authoritative listing read per retainer visit (Refresh all, cycles, restock),
+        // so the tracker / Low stock counts are exact without waiting for a second visit.
+        if (!jobObserved)
+        {
+            jobObserved = true;
+            ObserveListingsNow();
+        }
+
         // Fork: fetch phase runs before the job's actions.
         if (fetchRowsPending) BuildFetchRowsFromLive();
         if (fetchRows != null)
@@ -893,10 +954,8 @@ public sealed unsafe class Executor : IDisposable
         // Fork: restock handover after the placeholder listing is confirmed on this retainer.
         if (currentJobActions.Count == 0 && HandoverDueForCurrentJob())
         {
-            handover!.Row = 0;
-            handover.RowCount = ReadLiveListings().Count;
-            State = ExecutionState.HandoverClickRow;
-            Wait(TimeSpan.FromMilliseconds(800));
+            State = ExecutionState.HandoverOpenContext;
+            Wait(TimeSpan.FromMilliseconds(500));
             return;
         }
 
@@ -1689,6 +1748,12 @@ public sealed unsafe class Executor : IDisposable
         {
             State = ExecutionState.Done;
             log.Info($"[Restocker] Executor done: {CompletedJobs} retainers, {CompletedActions} actions");
+            // Full cycles print their own summary + lines (AutoCycleController); everything else here.
+            if (Mode != ExecutionMode.FullCycle && AppliedReprices.Count > 0)
+            {
+                Plugin.ChatPrint($"done: {AppliedReprices.Count} price(s) changed");
+                PrintRepriceLines();
+            }
             return;
         }
         State = ExecutionState.SelectingRetainer;

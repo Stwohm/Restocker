@@ -80,6 +80,25 @@ public class ListingTrackerTests
     }
 
     [Fact]
+    public void Listing_missing_from_a_non_empty_read_closes_immediately()
+    {
+        // Placeholder twine on slot 1, other listings remain: one read later it is gone.
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, false, 1, 10), new LiveListing(1, 100, false, 1, 99_999_999)), Name, T0);
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(0, 7, false, 1, 10)), Name, T0.AddSeconds(15));
+        Assert.Equal(ListingTracker.Gone, t.Records.Single(r => r.ItemId == 100).Outcome);
+    }
+
+    [Fact]
+    public void Authoritative_empty_read_closes_immediately()
+    {
+        var t = new ListingTracker();
+        t.ObserveRetainer(K, RetainerA, L(new LiveListing(1, 100, false, 1, 10)), Name, T0);
+        t.ObserveRetainer(K, RetainerA, L(), Name, T0.AddSeconds(15), authoritative: true);
+        Assert.Equal(ListingTracker.Gone, t.Records[0].Outcome);
+    }
+
+    [Fact]
     public void Transient_empty_read_does_not_break_the_lifecycle()
     {
         var t = new ListingTracker();

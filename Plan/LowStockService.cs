@@ -41,6 +41,11 @@ public sealed class LowStockService : IDisposable
         return configuration.Snapshots.Values.Where(s => cid == 0 || s.CharacterContentId == cid);
     }
 
+    /// <summary>Watched items at or below their threshold, with the listed count.</summary>
+    public List<(LowStockEntry Entry, int Listed)> LowItems()
+        => configuration.LowStock.Select(e => (e, ListedUnits(e.ItemId, e.IsHq)))
+            .Where(x => x.Item2 <= x.e.Threshold).ToList();
+
     public int ListedUnits(uint itemId, bool hq)
     {
         var keys = MyRetainers().Select(s => s.Key).ToHashSet();
@@ -145,6 +150,7 @@ public sealed class LowStockService : IDisposable
             var name = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>().TryGetRow(e.ItemId, out var row)
                 ? row.Name.ExtractText() : $"#{e.ItemId}";
             var avail = Sources(e.ItemId, e.IsHq).Sum(s => s.Available);
+            Plugin.Log.Information($"[Restocker] low stock alert: {name} listed={listed} threshold={e.Threshold}");
             Plugin.ChatPrint($"low stock: {name}{(e.IsHq ? " (HQ)" : "")}: {listed} listed (alert at ≤{e.Threshold}), {avail} available in retainers / bag / saddlebag. Restocky › Low stock to restock.");
         }
     }

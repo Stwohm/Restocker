@@ -93,7 +93,8 @@ public sealed class ListingTracker
         string retainerName,
         IReadOnlyList<LiveListing> live,
         Func<uint, string> itemName,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        bool authoritative = false)
     {
         var open = Records.Where(r => r.Outcome == Active && r.RetainerKey == retainerKey).ToList();
         var matched = new HashSet<ListingRecord>();
@@ -141,11 +142,11 @@ public sealed class ListingTracker
         foreach (var rec in open)
         {
             if (matched.Contains(rec)) continue;
-            if (rec.MissingSinceUtc == null)
-            {
-                rec.MissingSinceUtc = nowUtc;
-            }
-            else if (nowUtc - rec.MissingSinceUtc.Value >= GoneAfter)
+            rec.MissingSinceUtc ??= nowUtc;
+            // An authoritative read (executor, after the sell list settled) or any non-empty read
+            // is trusted: a listing that is not there is gone now. Only a passive EMPTY read waits,
+            // because the container can briefly read empty while the list is still loading.
+            if (authoritative || live.Count > 0 || nowUtc - rec.MissingSinceUtc.Value >= GoneAfter)
             {
                 rec.Outcome = Gone;
                 rec.EndedUtc = rec.MissingSinceUtc;

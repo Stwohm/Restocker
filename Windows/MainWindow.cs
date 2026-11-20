@@ -57,7 +57,11 @@ public sealed class MainWindow : Window, IDisposable
                 listTab.Draw();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("Low stock"))
+            var lowCount = Plugin.Instance.LowStock.LowItems().Count;
+            if (lowCount > 0) ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.55f, 0.4f, 1f));
+            var lowOpen = ImGui.BeginTabItem(lowCount > 0 ? $"Low stock ({lowCount})###lowstock" : "Low stock###lowstock");
+            if (lowCount > 0) ImGui.PopStyleColor();
+            if (lowOpen)
             {
                 lowStockTab ??= new LowStockTab(configuration, executor, confirmDialog, Plugin.Instance.LowStock);
                 lowStockTab.Draw();
@@ -127,6 +131,16 @@ public sealed class MainWindow : Window, IDisposable
                 ImGui.SameLine();
                 ImGui.TextDisabled("(" + Strings.ToastBellNotOpen + ")");
             }
+        }
+
+        // Fork: low stock at a glance, without opening the tab.
+        var low = Plugin.Instance.LowStock.LowItems();
+        if (low.Count > 0)
+        {
+            var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+            var text = string.Join(", ", low.Select(x =>
+                $"{(sheet.TryGetRow(x.Entry.ItemId, out var row) ? row.Name.ExtractText() : $"#{x.Entry.ItemId}")}{(x.Entry.IsHq ? " (HQ)" : "")} {x.Listed}"));
+            ImGui.TextColored(new Vector4(1f, 0.55f, 0.4f, 1f), $"Low stock: {text}");
         }
 
         // 直近の停止理由を見える化

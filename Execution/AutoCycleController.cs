@@ -257,7 +257,7 @@ public sealed class AutoCycleController : IDisposable
 
         // Summary + one line per changed price, for manual and auto runs alike.
         Print(LastSummary);
-        if (ok) PrintRepriceLines();
+        if (ok) executor.PrintRepriceLines();
         if (!cycleIsAuto) return;
         if (!Enabled) return;
 
