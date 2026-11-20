@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Restocker.Market;
+using Restocker.Localization;
 
 namespace Restocker.Windows;
 
@@ -38,7 +39,7 @@ public sealed class SalesTab
         var sold = records.Where(r => r.Outcome == ListingTracker.Sold).ToList();
         if (sold.Count > 0)
         {
-            ImGui.TextDisabled($"Sold: {sold.Count} listings, {sold.Sum(r => r.SoldTotalGil):N0} gil, avg {sold.Average(r => r.DaysListed ?? 0):0.0} days, avg {sold.Average(r => r.RepriceCount):0.0} reprices");
+            ImGui.TextDisabled($"Sold: {sold.Count} listings, {sold.Sum(r => r.SoldTotalGil):N0} gil, avg {sold.Average(r => r.DaysListed):0.0} days, avg {sold.Average(r => r.RepriceCount):0.0} reprices");
         }
 
         var rows = records
@@ -53,7 +54,7 @@ public sealed class SalesTab
 
         const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
                                       | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable;
-        if (!ImGui.BeginTable("##sales", 10, flags)) return;
+        if (!ImGui.BeginTable("##sales", 12, flags)) return;
         ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 0.25f);
         ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthStretch, 0.1f);
@@ -65,6 +66,8 @@ public sealed class SalesTab
         ImGui.TableSetupColumn("Days", ImGuiTableColumnFlags.WidthFixed, 44);
         ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 52);
         ImGui.TableSetupColumn("Sold for", ImGuiTableColumnFlags.WidthStretch, 0.09f);
+        ImGui.TableSetupColumn(Strings.Buyer);
+        ImGui.TableSetupColumn(Strings.SaleTime);
         ImGui.TableHeadersRow();
 
         foreach (var r in rows)
@@ -73,8 +76,8 @@ public sealed class SalesTab
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.ItemName + (r.IsHq ? " (HQ)" : ""));
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.RetainerName);
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.Quantity.ToString());
-            ImGui.TableNextColumn(); ImGui.TextUnformatted(r.FirstPrice.ToString("N0"));
-            ImGui.TableNextColumn(); ImGui.TextUnformatted(r.LastPrice.ToString("N0"));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(r.HistoryOnly ? "" : r.FirstPrice.ToString("N0"));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(r.HistoryOnly ? "" : r.LastPrice.ToString("N0"));
             ImGui.TableNextColumn(); ImGui.TextUnformatted($"{r.RepriceCount} ({r.UndercutCount})");
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("price changes (times a competitor was below us)");
             ImGui.TableNextColumn();
@@ -86,9 +89,11 @@ public sealed class SalesTab
                     .Select(c => $"{c.Seller}: up to {c.MaxQuantity}x, lowest {c.LowestPrice:N0}, seen {c.TimesSeen}, below us {c.TimesBelowUs}")));
             ImGui.TableNextColumn();
             var days = r.DaysListed ?? (DateTime.UtcNow - r.FirstSeenUtc).TotalDays;
-            ImGui.TextUnformatted(days.ToString("0.0"));
+            ImGui.TextUnformatted(r.HistoryOnly ? "" : days.ToString("0.0"));
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.Outcome);
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.SoldTotalGil > 0 ? r.SoldTotalGil.ToString("N0") : "");
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(r.BuyerName ?? "");
+            ImGui.TableNextColumn(); ImGui.TextUnformatted((r.SaleTimeUtc ?? r.SoldRecordedUtc)?.ToLocalTime().ToString("G") ?? "");
         }
         ImGui.EndTable();
     }

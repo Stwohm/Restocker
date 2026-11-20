@@ -213,6 +213,13 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A new price more than this % below the current one is NOT applied; it is logged as max_drop.");
 
+        var history = configuration.FetchSaleHistory;
+        if (ImGui.Checkbox(Strings.FetchSaleHistory, ref history))
+        {
+            configuration.FetchSaleHistory = history;
+            configuration.Save();
+        }
+
         var interval = configuration.AutoCycleIntervalMinutes;
         ImGui.SetNextItemWidth(120);
         if (ImGui.InputInt("Auto cycle interval (minutes)", ref interval))

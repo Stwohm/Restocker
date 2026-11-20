@@ -65,10 +65,18 @@ public sealed class ListingRecord
     /// <summary>When Restocky received the sale message; distinct from EndedUtc for gone→sold recovery.</summary>
     public DateTime? SoldRecordedUtc { get; set; }
 
-    /// <summary>Source that reported the sale: game or allaganmarket.</summary>
+    /// <summary>First source to report the sale: game, allaganmarket, or history.</summary>
     public string SoldSource { get; set; } = string.Empty;
 
-    public double? DaysListed => EndedUtc is { } e ? (e - FirstSeenUtc).TotalDays : null;
+    // Fork: authoritative sale history and the transaction identity survive reloads.
+    public string? HistoryKey { get; set; }
+    public string? BuyerName { get; set; }
+    public bool? IsMannequin { get; set; }
+    public long? SoldGrossGil { get; set; }
+    public DateTime? SaleTimeUtc { get; set; }
+    public bool HistoryOnly { get; set; }
+
+    public double? DaysListed => !HistoryOnly && EndedUtc is { } e ? (e - FirstSeenUtc).TotalDays : null;
 }
 
 /// <summary>
@@ -264,6 +272,68 @@ public sealed class ListingTracker
 
     public static long NetFromGross(long grossGil) => grossGil <= 0 ? 0 : (long)(grossGil * SaleNetRate);
 
+    // Fork: include chat-only sales, whose receipt time is the best available timestamp.
+    public IEnumerable<ListingRecord> GetSales(uint itemId, bool hq)
+        => Records.Where(r => r.Outcome == Sold && r.ItemId == itemId && r.IsHq == hq)
+            .OrderByDescending(r => r.SaleTimeUtc ?? r.SoldRecordedUtc ?? r.EndedUtc);
+
+    public void OnHistorySale(string retainerKey, string retainerName, RetainerHistorySale sale,
+        Func<uint, string> itemName)
+    {
+        var key = FormattableString.Invariant($"{retainerKey}|{sale.ItemId}|{sale.IsHq}|{sale.Quantity}|{sale.NetGil}|{sale.UnixSeconds}|{sale.Buyer}");
+        if (Records.Any(r => r.HistoryKey == key)) return;
+        var time = DateTimeOffset.FromUnixTimeSeconds(sale.UnixSeconds).UtcDateTime;
+        // Packet times have one-second precision. Never consume a newer relisting, or a
+        // listing still observed live after the sale, just because the price looks right.
+        var candidates = Records.Where(r => r.HistoryKey == null && r.RetainerKey == retainerKey
+            && r.ItemId == sale.ItemId && r.IsHq == sale.IsHq && r.Quantity == sale.Quantity
+            && r.FirstSeenUtc < time.AddSeconds(1));
+        var reported = candidates.Where(r => r.Outcome == Sold && r.SoldRecordedUtc != null);
+        var rec = reported.Where(r => (r.SoldRecordedUtc!.Value - time).Duration() <= DuplicateSaleWindow
+                && Math.Abs(r.SoldTotalGil - sale.NetGil) <= Tolerance(sale.NetGil))
+            .OrderBy(r => Math.Abs(r.SoldTotalGil - sale.NetGil))
+            .ThenBy(r => (r.SoldRecordedUtc!.Value - time).Duration()).FirstOrDefault();
+        var listings = candidates.Where(r => r.LastSeenUtc < time.AddSeconds(1)
+                && (r.Outcome == Active || (r.Outcome == Gone && r.EndedUtc >= time)))
+            .OrderByDescending(r => r.Outcome == Gone).ThenByDescending(r => r.LastSeenUtc).ToList();
+        // A notice delivered on login may be days newer than the transaction. Reconcile
+        // an exact, unambiguous amount inside its listing lifetime if no live/gone stack fits.
+        if (rec == null && listings.Count == 0)
+        {
+            var delayed = reported.Where(r => r.SoldTotalGil == sale.NetGil
+                && r.LastSeenUtc < time.AddSeconds(1) && r.EndedUtc >= time).Take(2).ToList();
+            if (delayed.Count == 1) rec = delayed[0];
+        }
+        rec ??= BestWithinTolerance(listings, sale.NetGil);
+        // A single eligible stack can have changed price since our last observation.
+        if (rec == null && listings.Count == 1) rec = listings[0];
+        if (rec == null)
+        {
+            rec = new ListingRecord
+            {
+                Id = Guid.NewGuid().ToString("N")[..10], RetainerKey = retainerKey,
+                RetainerName = retainerName, ItemId = sale.ItemId, ItemName = itemName(sale.ItemId),
+                IsHq = sale.IsHq, Quantity = sale.Quantity, Slot = -1, HistoryOnly = true,
+                FirstSeenUtc = time, LastSeenUtc = time,
+            };
+            Records.Add(rec);
+        }
+        else if (rec.SoldGrossGil == null && NetFromGross(rec.LastPrice * rec.Quantity) == sale.NetGil)
+        {
+            rec.SoldGrossGil = rec.LastPrice * rec.Quantity;
+        }
+
+        // Keep the original chat source and receipt time for paired-notice deduplication.
+        var source = rec.Outcome == Sold ? rec.SoldSource : "history";
+        var receipt = rec.SoldRecordedUtc ?? time;
+        MarkSold(rec, sale.NetGil, receipt, keepEndedUtc: false, source);
+        rec.EndedUtc = time;
+        rec.HistoryKey = key;
+        rec.SaleTimeUtc = time;
+        rec.BuyerName = sale.Buyer;
+        rec.IsMannequin = sale.IsMannequin;
+    }
+
     private static ListingRecord? BestWithinTolerance(IEnumerable<ListingRecord> candidates, long netGil)
     {
         var rec = candidates.OrderBy(r => Difference(r, netGil)).FirstOrDefault();
@@ -346,7 +416,7 @@ public sealed class ListingTracker
     }
 
     public const string ListingsHeader =
-        "listing_id,retainer,item_id,item_name,hq,qty,first_seen_utc,first_price,last_price,reprice_count,undercut_count,undercutters,competitors,ended_utc,outcome,sold_total_gil,days_listed";
+        "listing_id,retainer,item_id,item_name,hq,qty,first_seen_utc,first_price,last_price,reprice_count,undercut_count,undercutters,competitors,ended_utc,outcome,sold_total_gil,days_listed,buyer,sale_time_utc,sold_gross_gil,is_mannequin";
 
     public string ListingsCsv()
     {
@@ -367,9 +437,9 @@ public sealed class ListingTracker
                 Csv(r.ItemName),
                 r.IsHq ? "true" : "false",
                 r.Quantity.ToString(inv),
-                Iso(r.FirstSeenUtc),
-                r.FirstPrice.ToString(inv),
-                r.LastPrice.ToString(inv),
+                r.HistoryOnly ? string.Empty : Iso(r.FirstSeenUtc),
+                r.HistoryOnly ? string.Empty : r.FirstPrice.ToString(inv),
+                r.HistoryOnly ? string.Empty : r.LastPrice.ToString(inv),
                 r.RepriceCount.ToString(inv),
                 r.UndercutCount.ToString(inv),
                 Csv(undercutters),
@@ -377,7 +447,11 @@ public sealed class ListingTracker
                 r.EndedUtc is { } e ? Iso(e) : string.Empty,
                 r.Outcome,
                 r.SoldTotalGil.ToString(inv),
-                r.DaysListed is { } d ? d.ToString("0.00", inv) : string.Empty));
+                r.DaysListed is { } d ? d.ToString("0.00", inv) : string.Empty,
+                Csv(r.BuyerName ?? string.Empty),
+                (r.SaleTimeUtc ?? r.SoldRecordedUtc) is { } soldAt ? Iso(soldAt) : string.Empty,
+                r.SoldGrossGil?.ToString(inv) ?? string.Empty,
+                r.IsMannequin?.ToString().ToLowerInvariant() ?? string.Empty));
         }
         return sb.ToString();
     }

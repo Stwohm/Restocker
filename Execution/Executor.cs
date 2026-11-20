@@ -47,6 +47,9 @@ public sealed unsafe class Executor : IDisposable
 
     private readonly List<RetainerVisitJob> jobs = new();
     private int jobCursor;
+    private string? historyRetainerKey;
+    private long historyReceipt;
+    private DateTime historyDeadline;
     private readonly Queue<PlannedAction> currentJobActions = new();
     private readonly Queue<int> slotsToReadPrice = new();
     private string? readingSnapshotKey;
@@ -475,6 +478,7 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.FetchAwaitingSellListAfter: TickFetchAwaitingSellListAfter(); break;
                 case ExecutionState.ClosingSellList: TickClosingSellList(); break;
                 case ExecutionState.AwaitingSelectStringAfterSell: TickAwaitingSelectStringAfterSell(); break;
+                case ExecutionState.AwaitingSaleHistory: TickSaleHistory(); break;
                 case ExecutionState.DismissingRetainer: TickDismissingRetainer(); break;
                 case ExecutionState.AwaitingDismissed: TickAwaitingDismissed(); break;
                 case ExecutionState.HandoverOpenContext: TickHandoverOpenContext(); break;
@@ -1723,6 +1727,7 @@ public sealed unsafe class Executor : IDisposable
         {
             waitingSince = null;
             State = ExecutionState.DismissingRetainer;
+            TryOpenSaleHistory();
             Throttle();
             return;
         }
@@ -1734,9 +1739,61 @@ public sealed unsafe class Executor : IDisposable
         }
     }
 
+    // Fork: by this point the authoritative sell-list read has separated live stacks
+    // from missing ones. The next state is dismissal even if this optional read fails.
+    private void TryOpenSaleHistory()
+    {
+        historyRetainerKey = null;
+        if (Mode != ExecutionMode.FullCycle || !configuration.FetchSaleHistory) return;
+        try
+        {
+            var capture = Plugin.Instance.SaleHistory;
+            if (!capture.Available) return;
+            var key = RetainerHistoryCapture.ActiveKey(out var name);
+            if (key == null || name != jobs[jobCursor].RetainerName) return;
+            historyReceipt = capture.Receipt(key);
+            if (!SelectStringHelper.ClickEntry(AddonText.IsSaleHistoryEntry)) return;
+            historyRetainerKey = key;
+            historyDeadline = DateTime.UtcNow.AddSeconds(5);
+            State = ExecutionState.AwaitingSaleHistory;
+        }
+        catch (Exception ex) { log.Warning(ex, "[Restocky] Skipping sale history request"); }
+    }
+
+    private void TickSaleHistory()
+    {
+        try
+        {
+            var arrived = Plugin.Instance.SaleHistory.Receipt(historyRetainerKey!) != historyReceipt;
+            var window = AddonHelper.GetVisible("RetainerHistory");
+            if (DateTime.UtcNow < historyDeadline && (!arrived || window == null)) return;
+            if (!arrived) log.Debug("[Restocky] Sale history request timed out");
+            if (window != null) window->Close(true);
+        }
+        catch (Exception ex) { log.Warning(ex, "[Restocky] Skipping sale history wait"); }
+        State = ExecutionState.DismissingRetainer;
+        Throttle();
+    }
+
     private void TickDismissingRetainer()
     {
+        // A slow reply can open the window after the optional wait has expired.
+        if (historyRetainerKey != null)
+        {
+            try
+            {
+                var window = AddonHelper.GetVisible("RetainerHistory");
+                if (window != null)
+                {
+                    window->Close(true);
+                    Throttle();
+                    return;
+                }
+            }
+            catch (Exception ex) { log.Warning(ex, "[Restocky] Closing sale history failed"); }
+        }
         if (!SelectStringHelper.ClickEntry(AddonText.IsQuitEntry)) return;
+        historyRetainerKey = null;
         State = ExecutionState.AwaitingDismissed;
         Throttle();
     }

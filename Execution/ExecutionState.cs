@@ -79,6 +79,9 @@ public enum ExecutionState
     /// <summary>SelectString で「終了する」を選ぶ。</summary>
     DismissingRetainer,
 
+    // Fork: optional sale history read at the end of a full-cycle visit.
+    AwaitingSaleHistory,
+
     /// <summary>RetainerList に戻ったのを待つ → 次のジョブへ。</summary>
     AwaitingDismissed,
 

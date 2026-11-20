@@ -30,6 +30,9 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
 
+    [PluginService] internal static IGameInteropProvider Interop { get; private set; } = null!;
+    internal RetainerHistoryCapture SaleHistory { get; }
+
     private const string CommandName = "/restocky";
 
     public static Configuration Configuration { get; private set; } = null!;
@@ -55,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
 
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
         Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory());
+        SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
             Tracker.Tracker.ObserveCompetitors(item, hq, offers, DateTime.UtcNow);
         Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
@@ -113,6 +117,7 @@ public sealed class Plugin : IDalamudPlugin
         AutoCycle.Dispose();
         LowStock.Dispose();
         MarketWatcher.Dispose();
+        SaleHistory.Dispose();
         Tracker.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();

@@ -115,6 +115,15 @@ public static class AddonText
         return false;
     }
 
+    // Fork: retainer SelectString, Addon row 2382 in all six clients.
+    public static bool IsSaleHistoryEntry(string entryText)
+        => entryText?.Trim().TrimEnd('.').Replace('’', '\'') is "View sale history"
+            or "販売履歴を見る" or "Transaktionsverlauf ansehen" or "Voir l'historique des transactions"
+            or "查看出售记录" or "판매 내역 보기"
+            || (!string.IsNullOrEmpty(entryText) && entryText == SaleHistoryRow.Value);
+
+    private static readonly Lazy<string> SaleHistoryRow = new(() => TryRow(2382));
+
     // Lazy factory 全体を try でくるむ (Dalamud / Lumina 未ロードの単体テスト下でも
     // 例外で死なないように)。ホスト下では try/catch のオーバーヘッドは無視できる。
     private static readonly Lazy<string> LegacySellItemsRow = new(() => TryRow(5480));

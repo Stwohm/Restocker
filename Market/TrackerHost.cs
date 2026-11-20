@@ -64,7 +64,10 @@ public sealed class TrackerHost : IDisposable
         if (rec == null)
             log.Information($"[Restocker] sale message source=allaganmarket item='{itemName}' ids={string.Join("/", itemIds)} qty={qty} gross={grossGil} net={netGil}: no tracked listing");
         else
+        {
+            rec.SoldGrossGil = grossGil;
             LogSold(rec, netGil, "allaganmarket");
+        }
     }
 
     private void LogSold(ListingRecord rec, long gil, string source)
