@@ -18,6 +18,9 @@ public sealed class PriceHistoryRow
     public long NewPrice { get; init; }
     public bool Applied { get; init; }
     public RepriceReason Reason { get; init; }
+
+    /// <summary>Competitor retainers priced below our old price, ';'-separated.</summary>
+    public string Undercutters { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -27,7 +30,7 @@ public sealed class PriceHistoryRow
 public sealed class PriceHistoryLog
 {
     public const string Header =
-        "utc_time,retainer,slot,item_id,hq,qty,old_price,lowest_competitor,new_price,applied,reason";
+        "utc_time,retainer,slot,item_id,hq,qty,old_price,lowest_competitor,new_price,applied,reason,undercutters";
 
     private readonly string path;
     private readonly object gate = new();
@@ -50,7 +53,8 @@ public sealed class PriceHistoryLog
             r.LowestCompetitor.ToString(inv),
             r.NewPrice.ToString(inv),
             r.Applied ? "true" : "false",
-            RepriceRules.ReasonCode(r.Reason));
+            RepriceRules.ReasonCode(r.Reason),
+            Escape(r.Undercutters));
     }
 
     private static string Escape(string s)

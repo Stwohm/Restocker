@@ -20,6 +20,13 @@ public sealed unsafe class MarketWatcher : IDisposable
     private readonly IPluginLog log;
     public MarketCache Cache { get; } = new();
 
+    /// <summary>
+    /// Fork: fired for answers that belong to our own fetch (expected item set), i.e. the home
+    /// world board seen from our retainer. Browsing another world's board never fires it.
+    /// Args: itemId, isHq, competitor offers ascending.
+    /// </summary>
+    public event Action<uint, bool, System.Collections.Generic.IReadOnlyList<MarketOffer>>? CompetitorsObserved;
+
     /// <summary>同じ検索結果が複数回飛んでくる server エラー時の保護。</summary>
     private int lastRequestId = -1;
 
@@ -65,8 +72,8 @@ public sealed unsafe class MarketWatcher : IDisposable
             {
                 if (expectedItemId is { } exp && exp != 0)
                 {
-                    Cache.Replace(exp, false, Array.Empty<long>());
-                    Cache.Replace(exp, true, Array.Empty<long>());
+                    Cache.Replace(exp, false, Array.Empty<MarketOffer>());
+                    Cache.Replace(exp, true, Array.Empty<MarketOffer>());
                     log.Information($"[Restocker] OfferingsReceived item={exp} empty board -> no competitor");
                 }
                 return;
@@ -91,8 +98,8 @@ public sealed unsafe class MarketWatcher : IDisposable
 
             // Fork: keep every competitor price (ascending as delivered) so
             // LowestPriceResolver can actually drop bait listings. Upstream kept only the first.
-            var nqPrices = new System.Collections.Generic.List<long>();
-            var hqPrices = new System.Collections.Generic.List<long>();
+            var nqPrices = new System.Collections.Generic.List<MarketOffer>();
+            var hqPrices = new System.Collections.Generic.List<MarketOffer>();
             for (var idx = 0; idx < offerings.ItemListings.Count; idx++)
             {
                 var listing = offerings.ItemListings[idx];
@@ -105,14 +112,24 @@ public sealed unsafe class MarketWatcher : IDisposable
 
                 if (isOwn) continue;
                 if (price <= 0) continue;
-                if (listing.IsHq) hqPrices.Add(price);
-                else nqPrices.Add(price);
+                var offer = new MarketOffer(price, listing.RetainerName ?? string.Empty, (int)listing.ItemQuantity);
+                if (listing.IsHq) hqPrices.Add(offer);
+                else nqPrices.Add(offer);
             }
 
             // Both flags are always written (possibly empty) so "no HQ competitor" is a known
             // answer, not a timeout.
             Cache.Replace(itemId, false, nqPrices);
             Cache.Replace(itemId, true, hqPrices);
+            if (expectedItemId.HasValue)
+            {
+                try
+                {
+                    CompetitorsObserved?.Invoke(itemId, false, Cache.GetOffers(itemId, false));
+                    CompetitorsObserved?.Invoke(itemId, true, Cache.GetOffers(itemId, true));
+                }
+                catch (Exception ex) { log.Error(ex, "[Restocker] CompetitorsObserved handler threw"); }
+            }
 
             dump.Append($"\n  → nq={nqPrices.Count} (lowest {Cache.GetLowest(itemId, false):N0})  hq={hqPrices.Count} (lowest {Cache.GetLowest(itemId, true):N0})");
             log.Information(dump.ToString());

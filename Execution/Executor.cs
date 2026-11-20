@@ -613,7 +613,7 @@ public sealed unsafe class Executor : IDisposable
             job.RetainerName,
             live,
             (item, hq) => marketCache != null && marketCache.HasDataSince(item, hq, since)
-                ? marketCache.GetRaw(item, hq)
+                ? marketCache.GetOffers(item, hq)
                 : null,
             configuration.FloorFor,
             configuration.ToRepriceSettings(),
@@ -654,6 +654,7 @@ public sealed unsafe class Executor : IDisposable
             NewPrice = newPrice,
             Applied = applied,
             Reason = reason,
+            Undercutters = a.Undercutters,
         });
     }
 
@@ -728,6 +729,8 @@ public sealed unsafe class Executor : IDisposable
                     log.Information($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} item={action.ItemId} hq={action.IsHQ} {action.OldPrice:N0} -> {action.UnitPrice:N0} ({RepriceRules.ReasonCode(action.Reason)})");
                     RepricesApplied++;
                     WriteHistory(action, action.UnitPrice, true, action.Reason);
+                    Plugin.Instance?.Tracker.Tracker.OnRepriceApplied(
+                        ActiveRetainerKey(), action.ListingIndex, action.ItemId, action.IsHQ, action.UnitPrice);
                     Throttle();
                     return;
                 }

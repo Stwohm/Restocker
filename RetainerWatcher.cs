@@ -86,23 +86,39 @@ public sealed unsafe class RetainerWatcher : IDisposable
         };
         snapshot.Key = RetainerSnapshot.MakeKey(snapshot.CharacterContentId, snapshot.RetainerId);
 
-        snapshot.Listings = ReadListings();
+        snapshot.Listings = ReadListings(out var marketLoaded);
         snapshot.Inventory = ReadInventory();
 
         configuration.Snapshots[snapshot.Key] = snapshot;
         configuration.Save();
 
+        // Fork: feed the listing lifecycle tracker. Only with a loaded market container, so a
+        // half-loaded read never looks like "everything sold".
+        if (marketLoaded)
+        {
+            var items = dataManager.GetExcelSheet<Item>();
+            var live = new List<LiveListing>(snapshot.Listings.Count);
+            foreach (var l in snapshot.Listings)
+                live.Add(new LiveListing(l.ListingIndex, l.ItemId, l.IsHQ, l.Quantity, l.UnitPrice));
+            Plugin.Instance?.Tracker.Tracker.ObserveRetainer(
+                snapshot.Key, snapshot.RetainerName, live,
+                id => items.TryGetRow(id, out var row) ? row.Name.ExtractText() : $"#{id}",
+                DateTime.UtcNow);
+        }
+
         log.Debug($"[Restocker] snapshot updated: {snapshot.RetainerName} listings={snapshot.Listings.Count} inv={snapshot.Inventory.Count}");
     }
 
-    private List<ListingEntry> ReadListings()
+    private List<ListingEntry> ReadListings(out bool loaded)
     {
+        loaded = false;
         var result = new List<ListingEntry>();
         var im = InventoryManager.Instance();
         if (im == null) return result;
 
         var container = im->GetInventoryContainer(InventoryType.RetainerMarket);
         if (container == null || !container->IsLoaded) return result;
+        loaded = true;
 
         for (var i = 0; i < container->Size; i++)
         {

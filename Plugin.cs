@@ -44,6 +44,7 @@ public sealed class Plugin : IDalamudPlugin
     private Executor Executor { get; }
     private MarketWatcher MarketWatcher { get; }
     private AutoCycleController AutoCycle { get; }
+    public TrackerHost Tracker { get; }
 
     public Plugin()
     {
@@ -52,6 +53,9 @@ public sealed class Plugin : IDalamudPlugin
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
+        Tracker = new TrackerHost(Framework, ChatGui, Log, PluginInterface.GetPluginConfigDirectory());
+        MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
+            Tracker.Tracker.ObserveCompetitors(item, hq, offers, DateTime.UtcNow);
         Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
         Executor.History = new PriceHistoryLog(
             System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "price-history.csv"));
@@ -105,6 +109,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         AutoCycle.Dispose();
         MarketWatcher.Dispose();
+        Tracker.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();
         RetainerWatcher.Dispose();

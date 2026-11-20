@@ -16,6 +16,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly Executor executor;
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
+    private readonly SalesTab salesTab = new();
     private readonly ConfirmDialog confirmDialog = new();
 
     public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher, AutoCycleController autoCycle)
@@ -51,6 +52,11 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.BeginTabItem(Strings.TabList))
             {
                 listTab.Draw();
+                ImGui.EndTabItem();
+            }
+            if (ImGui.BeginTabItem("Sales"))
+            {
+                salesTab.Draw();
                 ImGui.EndTabItem();
             }
             if (ImGui.BeginTabItem(Strings.TabSettings))

@@ -115,10 +115,10 @@ public class RepriceRulesTests
             new(1, 100, true, 10, 120_000),   // HQ, no HQ competitor
             new(2, 200, false, 5, 1_000),     // no fresh data
         };
-        IReadOnlyList<long>? Comp(uint item, bool hq) => (item, hq) switch
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => (item, hq) switch
         {
-            (100, false) => new long[] { 75_000 },
-            (100, true) => new long[0],
+            (100, false) => new[] { new MarketOffer(75_000, "Rival", 1), new MarketOffer(90_000, "Bob", 1) },
+            (100, true) => new MarketOffer[0],
             _ => null,
         };
         var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
@@ -127,6 +127,7 @@ public class RepriceRulesTests
         Assert.Equal(0, a.ListingIndex);
         Assert.Equal(74_999, a.UnitPrice);
         Assert.Equal(80_000, a.OldPrice);
+        Assert.Equal("Rival 1x", a.Undercutters);
         Assert.Equal(2, r.NotApplied.Count);
         Assert.Equal(RepriceReason.NoCompetitor, r.NotApplied[0].Reason);
         Assert.Equal(RepriceReason.Error, r.NotApplied[1].Reason);
@@ -142,9 +143,23 @@ public class RepriceRulesTests
             OldPrice = 80_000, LowestCompetitor = 75_000, NewPrice = 74_999, Applied = true,
             Reason = RepriceReason.Undercut,
         };
-        Assert.Equal("2026-11-20T18:05:00Z,RetainerA,3,44000,true,5,80000,75000,74999,true,undercut",
+        Assert.Equal("2026-11-20T18:05:00Z,RetainerA,3,44000,true,5,80000,75000,74999,true,undercut,",
             PriceHistoryLog.Format(row));
-        Assert.Equal(11, PriceHistoryLog.Header.Split(',').Length);
+        Assert.Equal(12, PriceHistoryLog.Header.Split(',').Length);
+    }
+
+    [Fact]
+    public void Undercutters_sum_quantity_per_seller_cheapest_first()
+    {
+        var offers = new[]
+        {
+            new MarketOffer(84_999, "Rival", 3),
+            new MarketOffer(84_990, "Bob", 1),
+            new MarketOffer(84_998, "Rival", 1),
+            new MarketOffer(90_000, "Expensive", 9),
+        };
+        Assert.Equal("Bob 1x;Rival 4x", MarketOfferFormat.Undercutters(offers, 85_000));
+        Assert.Equal(string.Empty, MarketOfferFormat.Undercutters(offers, 1_000));
     }
 
     [Fact]
@@ -160,7 +175,7 @@ public class RepriceRulesTests
             var lines = File.ReadAllLines(path);
             Assert.Equal(3, lines.Length);
             Assert.Equal(PriceHistoryLog.Header, lines[0]);
-            Assert.EndsWith(",false,max_drop", lines[2]);
+            Assert.EndsWith(",false,max_drop,", lines[2]);
         }
         finally { File.Delete(path); }
     }

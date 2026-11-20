@@ -28,7 +28,7 @@ public static class AutoRepricePlanner
         string retainerKey,
         string retainerName,
         IReadOnlyList<LiveListing> listings,
-        Func<uint, bool, IReadOnlyList<long>?> competitors,
+        Func<uint, bool, IReadOnlyList<MarketOffer>?> competitors,
         Func<uint, long> floorFor,
         RepriceSettings settings,
         DateTime nowUtc)
@@ -36,12 +36,21 @@ public static class AutoRepricePlanner
         var result = new Result();
         foreach (var l in listings)
         {
-            var prices = competitors(l.ItemId, l.IsHQ);
+            var offers = competitors(l.ItemId, l.IsHQ);
             RepriceDecision d;
-            if (prices == null)
+            var undercutters = string.Empty;
+            if (offers == null)
+            {
                 d = new RepriceDecision(l.UnitPrice, false, RepriceReason.Error, 0);
+            }
             else
+            {
+                var prices = new List<long>(offers.Count);
+                foreach (var o in offers) prices.Add(o.Price);
+                prices.Sort();
                 d = RepriceRules.Decide(l.UnitPrice, prices, floorFor(l.ItemId), settings);
+                undercutters = MarketOfferFormat.Undercutters(offers, l.UnitPrice);
+            }
 
             if (d.Apply)
             {
@@ -57,6 +66,7 @@ public static class AutoRepricePlanner
                     OldPrice = l.UnitPrice,
                     LowestCompetitor = d.LowestCompetitor,
                     Reason = d.Reason,
+                    Undercutters = undercutters,
                 });
             }
             else
@@ -74,6 +84,7 @@ public static class AutoRepricePlanner
                     NewPrice = d.NewPrice,
                     Applied = false,
                     Reason = d.Reason,
+                    Undercutters = undercutters,
                 });
             }
         }
