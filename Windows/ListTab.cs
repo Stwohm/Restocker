@@ -529,8 +529,11 @@ public sealed class ListTab
 
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
-            ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("##pending-table", 6, flags)) return;
+            ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.ScrollY;
+        // Fork: fill the remaining height and scroll instead of overflowing the window.
+        var pendingHeight = System.Math.Max(80f, ImGui.GetContentRegionAvail().Y);
+        if (!ImGui.BeginTable("##pending-table", 6, flags, new System.Numerics.Vector2(0, pendingHeight))) return;
+        ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.35f);
         ImGui.TableSetupColumn(Strings.ColLotsConfig, ImGuiTableColumnFlags.WidthFixed, 110);
         ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthFixed, 100);

@@ -17,6 +17,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
     private readonly SalesTab salesTab = new();
+    private readonly MarketCache marketCache;
     private readonly ConfirmDialog confirmDialog = new();
 
     public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher, AutoCycleController autoCycle)
@@ -25,6 +26,7 @@ public sealed class MainWindow : Window, IDisposable
     {
         this.configuration = configuration;
         this.executor = executor;
+        this.marketCache = marketWatcher.Cache;
         this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache, autoCycle);
         this.listTab = new ListTab(configuration, executor, confirmDialog);
         SizeConstraints = new WindowSizeConstraints
@@ -235,16 +237,36 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.TextDisabled(Strings.EmptyHint);
             return;
         }
-        if (!ImGui.BeginTable("##floors", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                new Vector2(0, 260))) return;
+        // Reference columns: our current asking price(s) from the snapshots and the last fetched
+        // market lowest (NQ / HQ) from this session's cache.
+        var ourPrices = configuration.Snapshots.Values.SelectMany(s => s.Listings)
+            .GroupBy(l => l.ItemId)
+            .ToDictionary(g => g.Key, g => (Min: g.Min(l => l.UnitPrice), Max: g.Max(l => l.UnitPrice)));
+
+        if (!ImGui.BeginTable("##floors", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
+                new Vector2(0, System.Math.Max(160f, ImGui.GetContentRegionAvail().Y)))) return;
+        ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Floor", ImGuiTableColumnFlags.WidthFixed, 140);
+        ImGui.TableSetupColumn("Your price", ImGuiTableColumnFlags.WidthFixed, 130);
+        ImGui.TableSetupColumn("Market lowest", ImGuiTableColumnFlags.WidthFixed, 130);
+        ImGui.TableSetupColumn("Floor", ImGuiTableColumnFlags.WidthFixed, 120);
         ImGui.TableHeadersRow();
         foreach (var (id, name) in ids)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(name);
+            ImGui.TableNextColumn();
+            if (ourPrices.TryGetValue(id, out var ours))
+                ImGui.TextUnformatted(ours.Min == ours.Max ? ours.Min.ToString("N0") : $"{ours.Min:N0}–{ours.Max:N0}");
+            else
+                ImGui.TextDisabled("—");
+            ImGui.TableNextColumn();
+            var nq = marketCache.GetLowest(id, false);
+            var hq = marketCache.GetLowest(id, true);
+            var marketText = (nq > 0 ? nq.ToString("N0") : "") + (hq > 0 ? (nq > 0 ? " / " : "") + hq.ToString("N0") + " HQ" : "");
+            if (marketText.Length == 0) ImGui.TextDisabled("not fetched");
+            else ImGui.TextUnformatted(marketText);
             ImGui.TableNextColumn();
             var v = (int)Math.Min(configuration.FloorFor(id), int.MaxValue);
             ImGui.SetNextItemWidth(-1);

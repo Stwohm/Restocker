@@ -32,6 +32,9 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>FetchMarketPrice 完了後に発火するコールバック。RepriceTab が -1ギル を当てる用。</summary>
     public System.Action? OnFetchMarketCompleted;
 
+    /// <summary>Fork: fired after each retainer's fetch phase in a non-auto fetch job, with that retainer's snapshot key.</summary>
+    public System.Action<string>? OnFetchJobCompleted;
+
     public ExecutionState State { get; private set; } = ExecutionState.Idle;
     public ExecutionMode Mode { get; private set; }
     public string? StatusMessage { get; private set; }
@@ -144,6 +147,19 @@ public sealed unsafe class Executor : IDisposable
     }
 
     /// <summary>
+    /// Fork: like <see cref="StartFullCycle"/> but only fetches prices for every retainer; nothing is
+    /// applied. <see cref="OnFetchJobCompleted"/> fires per retainer so the UI can prefill prices.
+    /// </summary>
+    public void StartFetchAll()
+    {
+        if (IsRunning) { log.Warning("[Restocker] Executor.Start while already running"); return; }
+        jobs.Clear();
+        foreach (var r in ActiveRetainersInDisplayOrder())
+            jobs.Add(new RetainerVisitJob { RetainerName = r, Actions = new List<PlannedAction>(), FetchPrices = true });
+        Begin(ExecutionMode.ApplyActions);
+    }
+
+    /// <summary>
     /// Fork: one pass over every retainer at the bell. For each: open the sell list, fetch
     /// live market prices, plan with <see cref="RepriceRules"/>, apply, close, next.
     /// </summary>
@@ -238,6 +254,15 @@ public sealed unsafe class Executor : IDisposable
 
         try
         {
+            // Fork: retainer greeting / farewell lines ("Talk" box) block every menu until clicked.
+            if (TalkHelper.ClickIfVisible())
+            {
+                log.Debug("[Restocker] advanced Talk dialog");
+                waitingSince = null; // the wait timers should not count time spent in dialogue
+                Throttle();
+                return;
+            }
+
             switch (State)
             {
                 case ExecutionState.SelectingRetainer: TickSelectingRetainer(); break;
@@ -602,6 +627,8 @@ public sealed unsafe class Executor : IDisposable
         {
             try { OnFetchMarketCompleted?.Invoke(); }
             catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchMarketCompleted threw"); }
+            try { OnFetchJobCompleted?.Invoke(ActiveRetainerKey()); }
+            catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchJobCompleted threw"); }
             return;
         }
 

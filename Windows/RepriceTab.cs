@@ -91,6 +91,24 @@ public sealed class RepriceTab
             ImGui.SetTooltip("Every retainer: fetch live prices, lowest competitor -undercut, apply with the floor / max-drop guards. No confirm dialog.");
 
         ImGui.SameLine();
+        if (!canRun) ImGui.BeginDisabled();
+        if (ImGui.Button("Full cycle (I set prices)##restocky-manual"))
+        {
+            var undercut = configuration.UndercutGil;
+            executor.OnFetchMarketCompleted = null;
+            executor.OnFetchJobCompleted = key =>
+            {
+                if (!configuration.Snapshots.TryGetValue(key, out var s)) return;
+                expandedSections.Add("reprice-" + key);
+                ApplyMatchLowestForRetainer(s, offset: -undercut);
+            };
+            executor.StartFetchAll();
+        }
+        if (!canRun) ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Every retainer: fetch live prices and pre-fill the New column with lowest -undercut. Nothing is applied: edit prices, '+ Add all to plan', then Apply.");
+
+        ImGui.SameLine();
         var enabled = autoCycle.Enabled;
         if (!enabled && !bellOpen) ImGui.BeginDisabled();
         if (ImGui.Checkbox("Auto cycle every##restocky-auto", ref enabled))
@@ -230,6 +248,7 @@ public sealed class RepriceTab
             {
                 var capturedSnap = snap;
                 var capturedOffset = -undercutDelta;
+                executor.OnFetchJobCompleted = null;
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: capturedOffset);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
@@ -238,6 +257,7 @@ public sealed class RepriceTab
             if (ImGui.SmallButton(Strings.RepriceMatchLowestExactThisRetainer + "##matchexact-" + snap.Key))
             {
                 var capturedSnap = snap;
+                executor.OnFetchJobCompleted = null;
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: 0);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
@@ -525,8 +545,11 @@ public sealed class RepriceTab
 
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
-            ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("##reprice-pending", 6, flags)) return;
+            ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.ScrollY;
+        // Fork: fill the remaining height and scroll instead of overflowing the window.
+        var pendingHeight = System.Math.Max(80f, ImGui.GetContentRegionAvail().Y);
+        if (!ImGui.BeginTable("##reprice-pending", 6, flags, new System.Numerics.Vector2(0, pendingHeight))) return;
+        ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
         ImGui.TableSetupColumn(Strings.ColTarget, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
