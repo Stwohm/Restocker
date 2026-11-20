@@ -59,6 +59,9 @@ public sealed class Configuration : IPluginConfiguration
     /// so a Chat 2 "Market" tab that shows Retainer Sale Notifications picks them up.</summary>
     public int ChatChannel { get; set; } = (int)Dalamud.Game.Text.XivChatType.RetainerSale;
 
+    /// <summary>Items watched for low stock (alert + restock).</summary>
+    public List<Restocker.Plan.LowStockEntry> LowStock { get; set; } = new();
+
     /// <summary>Durations (seconds) of the last successful full cycles; used to time AutoRetainer waits.</summary>
     public List<double> RecentCycleSeconds { get; set; } = new();
 

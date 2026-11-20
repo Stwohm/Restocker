@@ -96,6 +96,9 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>Fork: per-run counters for the full / auto cycle summary.</summary>
     public int RepricesApplied { get; private set; }
     public int RepricesSkipped { get; private set; }
+
+    /// <summary>Fork: every price actually written in this run, for the chat summary.</summary>
+    public List<(string Retainer, uint ItemId, bool IsHq, long OldPrice, long NewPrice)> AppliedReprices { get; } = new();
     private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -218,6 +221,7 @@ public sealed unsafe class Executor : IDisposable
         fetchRows = null;
         fetchRowsPending = false;
         RepricesApplied = 0;
+        AppliedReprices.Clear();
         RepricesSkipped = 0;
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
@@ -767,6 +771,8 @@ public sealed unsafe class Executor : IDisposable
                         (uint)Math.Min(action.UnitPrice, uint.MaxValue));
                     log.Information($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} item={action.ItemId} hq={action.IsHQ} {action.OldPrice:N0} -> {action.UnitPrice:N0} ({RepriceRules.ReasonCode(action.Reason)})");
                     RepricesApplied++;
+                    AppliedReprices.Add((jobs.Count > jobCursor ? jobs[jobCursor].RetainerName : "?",
+                        action.ItemId, action.IsHQ, action.OldPrice, action.UnitPrice));
                     WriteHistory(action, action.UnitPrice, true, action.Reason);
                     Plugin.Instance?.Tracker.Tracker.OnRepriceApplied(
                         ActiveRetainerKey(), action.ListingIndex, action.ItemId, action.IsHQ, action.UnitPrice);

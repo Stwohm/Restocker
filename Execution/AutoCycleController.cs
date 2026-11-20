@@ -255,11 +255,10 @@ public sealed class AutoCycleController : IDisposable
             : $"{stamp} stopped: {executor.StatusMessage}";
         log.Information($"[Restocker] cycle finished: {LastSummary}");
 
-        if (!cycleIsAuto)
-        {
-            Print(LastSummary);
-            return;
-        }
+        // Summary + one line per changed price, for manual and auto runs alike.
+        Print(LastSummary);
+        if (ok) PrintRepriceLines();
+        if (!cycleIsAuto) return;
         if (!Enabled) return;
 
         if (ok)
@@ -286,6 +285,19 @@ public sealed class AutoCycleController : IDisposable
             }
         }
         ScheduleNext();
+    }
+
+    /// <summary>"Ascendant Twine [RetainerA]: 84,999 → 84,998" for every price written this run.</summary>
+    private void PrintRepriceLines()
+    {
+        if (executor.AppliedReprices.Count == 0) return;
+        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+        foreach (var r in executor.AppliedReprices)
+        {
+            var name = sheet.TryGetRow(r.ItemId, out var row) ? row.Name.ExtractText() : $"#{r.ItemId}";
+            var arrow = r.NewPrice < r.OldPrice ? "↓" : "↑";
+            Print($"  {name}{(r.IsHq ? " (HQ)" : "")} [{r.Retainer}]: {r.OldPrice:N0} → {r.NewPrice:N0} {arrow}");
+        }
     }
 
     /// <summary>Null when it is safe to keep the loop on, otherwise why it must stop.</summary>

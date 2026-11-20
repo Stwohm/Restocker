@@ -17,6 +17,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
     private readonly SalesTab salesTab = new();
+    private LowStockTab? lowStockTab;
     private readonly MarketCache marketCache;
     private readonly ConfirmDialog confirmDialog = new();
 
@@ -54,6 +55,12 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.BeginTabItem(Strings.TabList))
             {
                 listTab.Draw();
+                ImGui.EndTabItem();
+            }
+            if (ImGui.BeginTabItem("Low stock"))
+            {
+                lowStockTab ??= new LowStockTab(configuration, executor, confirmDialog, Plugin.Instance.LowStock);
+                lowStockTab.Draw();
                 ImGui.EndTabItem();
             }
             if (ImGui.BeginTabItem("Sales"))

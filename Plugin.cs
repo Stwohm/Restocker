@@ -45,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
     private MarketWatcher MarketWatcher { get; }
     private AutoCycleController AutoCycle { get; }
     public TrackerHost Tracker { get; }
+    public Restocker.Plan.LowStockService LowStock { get; private set; } = null!;
 
     public Plugin()
     {
@@ -66,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
             Framework, Condition, ObjectTable, ChatGui, Log, Executor, Configuration,
             () => ArDetector.IsAutoRetainerLoaded(), arIpc);
 
+        LowStock = new Restocker.Plan.LowStockService(Framework, Configuration, Tracker.Tracker, MarketWatcher.Cache);
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle);
         WindowSystem.AddWindow(MainWindow);
         ProgressWindow = new ProgressWindow(Executor);
@@ -109,6 +111,7 @@ public sealed class Plugin : IDalamudPlugin
 
         WindowSystem.RemoveAllWindows();
         AutoCycle.Dispose();
+        LowStock.Dispose();
         MarketWatcher.Dispose();
         Tracker.Dispose();
         Executor.Dispose();
