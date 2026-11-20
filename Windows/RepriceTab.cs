@@ -123,6 +123,8 @@ public sealed class RepriceTab
             ImGui.SameLine();
             if (executor.IsRunning)
                 ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.9f, 0.5f, 1f), "running…");
+            else if (autoCycle.WaitingReason is { } why)
+                ImGui.TextColored(new System.Numerics.Vector4(0.95f, 0.8f, 0.4f, 1f), why);
             else if (autoCycle.NextRunUtc is { } next)
             {
                 var left = next - System.DateTime.UtcNow;

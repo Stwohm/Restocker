@@ -13,5 +13,5 @@
     "list"
   ],
   "RepoUrl": "https://github.com/Stwohm/Restocker",
-  "Changelog": "0.2.0.0 — Fork of Restocker 0.1.0.0."
+  "Changelog": "0.3.0.0 — Listing lifecycle and competitor tracking, AutoRetainer coordination, materia name fix, editable interval."
 }

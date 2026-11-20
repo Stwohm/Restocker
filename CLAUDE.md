@@ -27,6 +27,22 @@ Fork changes and where they live:
   zone / duty pop / user cancel / N failures, always prints the reason to chat.
 - This deliberately relaxes upstream's "only write game state behind Apply + confirm" rule for the
   two cycle paths. The manual tabs keep the confirm dialog.
+- **Dialog item names** (`Common/DialogItemName.cs`, tested): node text is decoded as a SeString.
+  Raw bytes leaked macro remnants ("...Materia VIH") and the substring fallback picked the next
+  materia tier, so the market answer was ignored and the row timed out.
+- **Listing tracker** (`Market/ListingTracker.cs`, tested; host `Market/TrackerHost.cs`): lifecycle
+  per listing (first/last price, reprices, undercuts, competitors with units, days, sold gil from
+  the RetainerSale chat message via `Market/ChatHook.cs`). Fed by RetainerWatcher (loaded market
+  container only), MarketWatcher.CompetitorsObserved (own fetches only = home world), Executor.
+  Files: `listings.json`, `listings.csv`, `competitors.csv`. Sales tab shows it.
+- **AutoRetainer** (`AutoRetainerIpc.cs`, `Execution/AutoRetainerGate.cs` tested): due cycle waits
+  while AR is busy or a venture is ready / due within avg cycle + 2 min (when RetainerSense or
+  multi mode would act), max 15 min idle wait; AR is suppressed (`AutoRetainer.SetSuppressed`)
+  during our cycle and released after. Closed bell is reopened via `Common/BellHelper.cs`
+  (EObjName 2000401, same as AR). IPC names checked against AR master 2026-11-20.
+- **Distribution:** `repo.json` (custom repo URL
+  `https://raw.githubusercontent.com/Stwohm/Restocker/main/repo.json`) points at the latest GitHub
+  release's `latest.zip`; bump `AssemblyVersion` there with every release.
 
 Pending in-game verification is tracked in the vault (`🏰 300-Projects/FFXIV/Eklentiler.md` › Restocky).
 

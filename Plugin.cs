@@ -61,9 +61,10 @@ public sealed class Plugin : IDalamudPlugin
             System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "price-history.csv"));
 
         ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
+        var arIpc = new AutoRetainerIpc(PluginInterface, Log, () => ArDetector.IsAutoRetainerLoaded());
         AutoCycle = new AutoCycleController(
             Framework, Condition, ObjectTable, ChatGui, Log, Executor, Configuration,
-            () => ArDetector.IsAutoRetainerLoaded());
+            () => ArDetector.IsAutoRetainerLoaded(), arIpc);
 
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle);
         WindowSystem.AddWindow(MainWindow);

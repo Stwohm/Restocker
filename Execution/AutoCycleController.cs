@@ -25,7 +25,20 @@ public sealed class AutoCycleController : IDisposable
     private readonly Executor executor;
     private readonly Configuration configuration;
     private readonly Func<bool> isAutoRetainerLoaded;
+    private readonly AutoRetainerIpc ar;
     private readonly Random rng = new();
+
+    // ---- AutoRetainer coordination ----
+    private DateTime? arWaitSinceUtc;
+    private DateTime arLastBusyUtc = DateTime.MinValue;
+    private DateTime nextArPollUtc = DateTime.MinValue;
+    private DateTime? bellReopenAtUtc;
+    private DateTime cycleStartUtc;
+    private static readonly TimeSpan ArMargin = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ArMaxWait = TimeSpan.FromMinutes(15);
+
+    /// <summary>Non-null while the loop is holding back for AutoRetainer (shown in the UI).</summary>
+    public string? WaitingReason { get; private set; }
 
     private bool cycleRunning;
     private bool cycleIsAuto;
@@ -49,8 +62,10 @@ public sealed class AutoCycleController : IDisposable
         IPluginLog log,
         Executor executor,
         Configuration configuration,
-        Func<bool> isAutoRetainerLoaded)
+        Func<bool> isAutoRetainerLoaded,
+        AutoRetainerIpc ar)
     {
+        this.ar = ar;
         this.framework = framework;
         this.condition = condition;
         this.objectTable = objectTable;
@@ -62,7 +77,15 @@ public sealed class AutoCycleController : IDisposable
         framework.Update += Tick;
     }
 
-    public void Dispose() => framework.Update -= Tick;
+    public void Dispose()
+    {
+        framework.Update -= Tick;
+        ar.Release();
+    }
+
+    private ulong ContentId() => Plugin.PlayerState.ContentId;
+
+    private TimeSpan ExpectedCycle() => AutoRetainerGate.ExpectedCycle(configuration.RecentCycleSeconds);
 
     public static bool IsBellOpen() => AddonHelper.IsOpen("RetainerList");
 
@@ -71,8 +94,11 @@ public sealed class AutoCycleController : IDisposable
     {
         if (executor.IsRunning) return false;
         if (!IsBellOpen()) { Print("open the summoning bell first."); return false; }
-        if (isAutoRetainerLoaded())
-            Print("warning: AutoRetainer is loaded. Make sure it is not driving the bell right now.");
+        if (ar.Read(ContentId()) is { Busy: true })
+        {
+            Print("AutoRetainer is working at the bell; try again when it is done.");
+            return false;
+        }
         Start(auto: false);
         return executor.IsRunning;
     }
@@ -94,8 +120,8 @@ public sealed class AutoCycleController : IDisposable
         // at 30 shows 30:00. "Full cycle (once)" is the way to run immediately.
         NextRunUtc = DateTime.UtcNow + Interval();
         Print($"auto cycle ON, every {Interval().TotalMinutes:0} min (+/- {Math.Max(0, configuration.AutoCycleJitterSeconds)} s).");
-        if (isAutoRetainerLoaded())
-            Print("warning: AutoRetainer is loaded. If it drives the bell at the same time the two will collide.");
+        if (ar.IsLoaded)
+            Print("AutoRetainer detected: each cycle waits while it works or a venture is due, and pauses it while Restocky runs.");
         log.Information("[Restocker] auto cycle enabled");
     }
 
@@ -104,7 +130,11 @@ public sealed class AutoCycleController : IDisposable
         if (!Enabled) return;
         Enabled = false;
         NextRunUtc = null;
+        WaitingReason = null;
+        arWaitSinceUtc = null;
+        bellReopenAtUtc = null;
         if (cycleRunning && cycleIsAuto && executor.IsRunning) executor.Cancel();
+        if (!cycleRunning) ar.Release();
         Print($"auto cycle OFF: {reason}");
         log.Information($"[Restocker] auto cycle disabled: {reason}");
     }
@@ -118,14 +148,17 @@ public sealed class AutoCycleController : IDisposable
 
     private void Start(bool auto)
     {
+        ar.Suppress();
         executor.StartFullCycle();
         if (!executor.IsRunning)
         {
+            ar.Release();
             LastSummary = "no retainers in the bell list";
             return;
         }
         cycleRunning = true;
         cycleIsAuto = auto;
+        cycleStartUtc = DateTime.UtcNow;
     }
 
     private TimeSpan Interval() => TimeSpan.FromMinutes(Math.Max(1, configuration.AutoCycleIntervalMinutes));
@@ -148,18 +181,16 @@ public sealed class AutoCycleController : IDisposable
             if (cycleRunning && !executor.IsRunning) FinishCycle();
             if (!Enabled) return;
 
+            if (now >= nextArPollUtc && ar.IsLoaded)
+            {
+                nextArPollUtc = now + TimeSpan.FromSeconds(1);
+                if (ar.Read(ContentId()) is { Busy: true }) arLastBusyUtc = now;
+            }
+
             var stop = StopReason();
             if (stop != null) { Disable(stop); return; }
 
-            // Only from the plain bell list: never while the user is inside a retainer's menus.
-            if (!executor.IsRunning && NextRunUtc is { } next && now >= next && IsBellOpen()
-                && !AddonHelper.IsOpen("SelectString") && !AddonHelper.IsOpen("RetainerSellList")
-                && !AddonHelper.IsOpen("RetainerSell"))
-            {
-                log.Information("[Restocker] auto cycle: starting full cycle");
-                Start(auto: true);
-                if (!cycleRunning) ScheduleNext();
-            }
+            if (!executor.IsRunning && NextRunUtc is { } next && now >= next) TryStartDue(now);
         }
         catch (Exception ex)
         {
@@ -168,9 +199,55 @@ public sealed class AutoCycleController : IDisposable
         }
     }
 
+    /// <summary>Cycle is due: wait for AutoRetainer if needed, reopen the bell if it closed, then start.</summary>
+    private void TryStartDue(DateTime now)
+    {
+        var st = ar.Read(ContentId());
+        var waited = arWaitSinceUtc is { } since ? now - since : TimeSpan.Zero;
+        var gate = AutoRetainerGate.Decide(st, ExpectedCycle(), ArMargin, waited, ArMaxWait);
+        if (!gate.Proceed)
+        {
+            if (arWaitSinceUtc == null) log.Information($"[Restocker] auto cycle waiting: {gate.Reason}");
+            arWaitSinceUtc ??= now;
+            WaitingReason = gate.Reason;
+            return;
+        }
+
+        // AutoRetainer closes the bell when it is done. Reopen it once, give it a few seconds.
+        if (!IsBellOpen())
+        {
+            if (bellReopenAtUtc == null)
+            {
+                bellReopenAtUtc = now;
+                WaitingReason = "reopening the summoning bell";
+                if (!BellHelper.TryOpenNearestBell()) { Disable("bell closed and no summoning bell within reach"); }
+                return;
+            }
+            if (now - bellReopenAtUtc.Value > TimeSpan.FromSeconds(8)) Disable("could not reopen the summoning bell");
+            return;
+        }
+
+        // Only from the plain bell list: never while someone is inside a retainer's menus.
+        if (AddonHelper.IsOpen("SelectString") || AddonHelper.IsOpen("RetainerSellList") || AddonHelper.IsOpen("RetainerSell"))
+            return;
+
+        if (arWaitSinceUtc != null) log.Information($"[Restocker] auto cycle: AutoRetainer clear after {(now - arWaitSinceUtc.Value).TotalSeconds:0}s ({gate.Reason})");
+        arWaitSinceUtc = null;
+        bellReopenAtUtc = null;
+        WaitingReason = null;
+        log.Information("[Restocker] auto cycle: starting full cycle");
+        Start(auto: true);
+        if (!cycleRunning) ScheduleNext();
+    }
+
+    /// <summary>AutoRetainer may legitimately have the bell (or have closed it) right now.</summary>
+    private bool AutoRetainerOwnsBell(DateTime now)
+        => ar.IsLoaded && (arWaitSinceUtc != null || bellReopenAtUtc != null || now - arLastBusyUtc < TimeSpan.FromSeconds(60));
+
     private void FinishCycle()
     {
         cycleRunning = false;
+        ar.Release();
         var ok = executor.State == ExecutionState.Done;
         var stamp = DateTime.Now.ToString("HH:mm");
         LastSummary = ok
@@ -188,6 +265,10 @@ public sealed class AutoCycleController : IDisposable
         if (ok)
         {
             ConsecutiveFailures = 0;
+            // Learn how long a cycle takes; the AutoRetainer gate uses the average of the last 5.
+            configuration.RecentCycleSeconds.Add((DateTime.UtcNow - cycleStartUtc).TotalSeconds);
+            while (configuration.RecentCycleSeconds.Count > 5) configuration.RecentCycleSeconds.RemoveAt(0);
+            configuration.Save();
         }
         else if (executor.StatusMessage == "cancelled")
         {
@@ -225,7 +306,8 @@ public sealed class AutoCycleController : IDisposable
 
         // During a run the executor walks retainer menus; it stops by itself if the bell
         // UI disappears. Between runs the player must still be at the bell.
-        if (!executor.IsRunning && !condition[ConditionFlag.OccupiedSummoningBell]) return "left the summoning bell";
+        if (!executor.IsRunning && !condition[ConditionFlag.OccupiedSummoningBell] && !AutoRetainerOwnsBell(DateTime.UtcNow))
+            return "left the summoning bell";
         return null;
     }
 

@@ -55,6 +55,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Consecutive failed cycles before the auto cycle turns itself off.</summary>
     public int AutoCycleMaxFailures { get; set; } = 3;
 
+    /// <summary>Durations (seconds) of the last successful full cycles; used to time AutoRetainer waits.</summary>
+    public List<double> RecentCycleSeconds { get; set; } = new();
+
     public long FloorFor(uint itemId) => PriceFloors.TryGetValue(itemId, out var f) ? f : 0;
 
     public Restocker.Market.RepriceSettings ToRepriceSettings() => new()
