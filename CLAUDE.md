@@ -1,5 +1,36 @@
 # CLAUDE.md
 
+## Fork: Restocky (Stwohm/Restocker, private)
+
+Personal fork of yagi2/Restocker. InternalName / assembly / command: `Restocky` / `/restocky`.
+Config: `pluginConfigs\Restocky.json`, history: `pluginConfigs\Restocky\price-history.csv`.
+Remotes: `origin` = Stwohm/Restocker, `upstream` = yagi2/Restocker. Namespaces stay `Restocker.*`.
+
+Fork changes and where they live:
+
+- **Fetch row queue** (`Execution/FetchRowQueue.cs`, tested). Fixes yagi2/Restocker#1: skip paths
+  (duplicate / unresolved name) only close the dialog; the one row advance is
+  `CompleteCurrentRow()` in `TickFetchAwaitingSellListAfter`. Rows and unique count come from the
+  LIVE `RetainerMarket` container (`ReadLiveListings`), never from the snapshot.
+- **Stale snapshot guard.** Reprice re-checks that the server slot still holds the planned
+  item/HQ before `SetRetainerMarketPrice`; mismatch = skip + history row `error`. RepriceTab keys
+  edited prices by slot+item+HQ and re-reads the snapshot after a fetch.
+- **Market data.** `MarketWatcher` keeps every competitor price (upstream kept only the first, so
+  the outlier filter never ran) and writes empty lists for "no competitor". `MarketCache` has
+  update timestamps; a fetch only accepts data newer than its ComparePrices click.
+- **Rules** (`Market/RepriceRules.cs`, tested): lowest competitor (outliers dropped) - undercut,
+  clamped to per-item floor, refused above `MaxDropPercent`. `Plan/AutoRepricePlanner.cs` applies
+  it per retainer.
+- **Full cycle** (`ExecutionMode.FullCycle`, `Executor.StartFullCycle`): per retainer fetch -> plan
+  -> apply -> next, no confirm dialog. **Auto cycle** (`Execution/AutoCycleController.cs`): timed full
+  cycle at the bell, never persisted, stops on leave bell / move / combat / duty / cutscene /
+  zone / duty pop / user cancel / N failures, always prints the reason to chat.
+- This deliberately relaxes upstream's "only write game state behind Apply + confirm" rule for the
+  two cycle paths. The manual tabs keep the confirm dialog.
+
+Pending in-game verification is tracked in the vault (`🏰 300-Projects/FFXIV/Eklentiler.md` › Restocky).
+
+
 Notes for future agents working on Restocker.
 
 ## Project at a glance

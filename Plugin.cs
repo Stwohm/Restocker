@@ -28,6 +28,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
 
     private const string CommandName = "/restocky";
 
@@ -42,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     private AutoRetainerDetector ArDetector { get; }
     private Executor Executor { get; }
     private MarketWatcher MarketWatcher { get; }
+    private AutoCycleController AutoCycle { get; }
 
     public Plugin()
     {
@@ -51,8 +53,15 @@ public sealed class Plugin : IDalamudPlugin
 
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
         Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
+        Executor.History = new PriceHistoryLog(
+            System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "price-history.csv"));
 
-        MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
+        ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
+        AutoCycle = new AutoCycleController(
+            Framework, Condition, ObjectTable, ChatGui, Log, Executor, Configuration,
+            () => ArDetector.IsAutoRetainerLoaded());
+
+        MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle);
         WindowSystem.AddWindow(MainWindow);
         ProgressWindow = new ProgressWindow(Executor);
         WindowSystem.AddWindow(ProgressWindow);
@@ -74,7 +83,6 @@ public sealed class Plugin : IDalamudPlugin
             () => RetainerWatcher.CaptureCharacterSnapshot()
         );
 
-        ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
         ArDetector.WarnIfPresent();
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
@@ -95,6 +103,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
+        AutoCycle.Dispose();
         MarketWatcher.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();

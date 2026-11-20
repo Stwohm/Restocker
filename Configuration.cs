@@ -35,6 +35,34 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public int Language { get; set; } = -1;
 
+    // ---------------- Fork (Restocky) ----------------
+
+    /// <summary>Gil below the lowest competitor for the full / auto cycle.</summary>
+    public int UndercutGil { get; set; } = 1;
+
+    /// <summary>Do not apply a new price that is more than this % below the current one. 0 = off.</summary>
+    public double MaxDropPercent { get; set; } = 30;
+
+    /// <summary>Per-item minimum price (key = item id, HQ and NQ share it). Missing / 0 = no floor.</summary>
+    public Dictionary<uint, long> PriceFloors { get; set; } = new();
+
+    /// <summary>Auto cycle interval in minutes.</summary>
+    public int AutoCycleIntervalMinutes { get; set; } = 10;
+
+    /// <summary>Random +/- jitter added to each auto cycle interval, in seconds.</summary>
+    public int AutoCycleJitterSeconds { get; set; } = 60;
+
+    /// <summary>Consecutive failed cycles before the auto cycle turns itself off.</summary>
+    public int AutoCycleMaxFailures { get; set; } = 3;
+
+    public long FloorFor(uint itemId) => PriceFloors.TryGetValue(itemId, out var f) ? f : 0;
+
+    public Restocker.Market.RepriceSettings ToRepriceSettings() => new()
+    {
+        UndercutGil = UndercutGil,
+        MaxDropPercent = MaxDropPercent,
+    };
+
     public Language ResolveLanguage(Dalamud.Game.ClientLanguage clientLanguage)
     {
         if (Language >= 0 && Language <= 5)

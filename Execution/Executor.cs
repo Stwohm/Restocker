@@ -7,6 +7,8 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Restocker.Common;
 using Restocker.Data;
+using Restocker.Market;
+using Restocker.Plan;
 
 namespace Restocker.Execution;
 
@@ -63,13 +65,31 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>FetchAwaitingSellDialog で listing slot click を再送した記録。</summary>
     private bool fetchSlotClickRetried;
 
-    /// <summary>1 fetch ジョブ中に既に取得済みの (itemId, isHq)。同じアイテムを 2 度
-    /// 引かないために使う。Begin でクリアされる。</summary>
-    private readonly HashSet<(uint, bool)> fetchedThisSession = new();
+    // ---- Fork: fetch phase (see FetchRowQueue for the row-advance contract) ----
 
-    /// <summary>fetch ジョブ開始時の snapshot 上の unique item 数。これに到達したら
-    /// 残り actions が同 item の重複なので一括破棄して終了する。</summary>
-    private int totalUniqueFetchTargets;
+    /// <summary>Non-null while the current job is walking sell-list rows for market prices.</summary>
+    private FetchRowQueue? fetchRows;
+
+    /// <summary>Set on entering a FetchPrices job; rows are built from the LIVE market
+    /// container on the first PerformingAction tick (after the snapshot wait).</summary>
+    private bool fetchRowsPending;
+
+    /// <summary>(item, hq) resolved from the currently open RetainerSell dialog.</summary>
+    private uint fetchItemId;
+    private bool fetchIsHq;
+
+    /// <summary>When ComparePrices was clicked; cache entries older than this are stale.</summary>
+    private DateTime fetchClickedAtUtc;
+
+    /// <summary>Start of the current job's fetch phase; the planner only trusts data newer than this.</summary>
+    private DateTime jobFetchStartUtc;
+
+    /// <summary>Fork: append-only price-history.csv. Null = disabled.</summary>
+    public PriceHistoryLog? History { get; set; }
+
+    /// <summary>Fork: per-run counters for the full / auto cycle summary.</summary>
+    public int RepricesApplied { get; private set; }
+    public int RepricesSkipped { get; private set; }
     private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -116,31 +136,32 @@ public sealed unsafe class Executor : IDisposable
             log.Warning($"[Restocker] StartFetchMarketPricesForRetainer: unknown key {retainerKey}");
             return;
         }
-        // snapshot の listing 数 (= 表示行数) ぶん、画面 row 0..N-1 を click する。
-        // ItemId / IsHQ は dialog open 後に動的に確定するため、ここでは入れない。
-        var actions = new List<PlannedAction>();
-        var rowCount = snap.Listings.Count;
-        for (var row = 0; row < rowCount; row++)
+        // Fork: row count and unique items are read from the LIVE market container once the
+        // sell list is open (see BuildFetchRowsFromLive), not from the possibly stale snapshot.
+        jobs.Clear();
+        jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = new List<PlannedAction>(), FetchPrices = true });
+        Begin(ExecutionMode.ApplyActions);
+    }
+
+    /// <summary>
+    /// Fork: one pass over every retainer at the bell. For each: open the sell list, fetch
+    /// live market prices, plan with <see cref="RepriceRules"/>, apply, close, next.
+    /// </summary>
+    public void StartFullCycle()
+    {
+        if (IsRunning) { log.Warning("[Restocker] Executor.Start while already running"); return; }
+        jobs.Clear();
+        foreach (var r in ActiveRetainersInDisplayOrder())
         {
-            actions.Add(new PlannedAction
+            jobs.Add(new RetainerVisitJob
             {
-                Kind = PlannedActionKind.FetchMarketPrice,
-                RetainerKey = retainerKey,
-                ItemId = 0,
-                IsHQ = false,
-                ListingIndex = row,
+                RetainerName = r,
+                Actions = new List<PlannedAction>(),
+                FetchPrices = true,
+                AutoPlan = true,
             });
         }
-        if (actions.Count == 0) { log.Info("[Restocker] no items to fetch"); return; }
-
-        // snapshot から unique (item, hq) 数を見積もる。fetchedThisSession.Count が
-        // これに達した時点で残り actions は重複なので drain して即終了する。
-        var uniqueTargets = new HashSet<(uint, bool)>();
-        foreach (var l in snap.Listings) uniqueTargets.Add((l.ItemId, l.IsHQ));
-        totalUniqueFetchTargets = uniqueTargets.Count;
-        jobs.Clear();
-        jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = actions });
-        Begin(ExecutionMode.ApplyActions);
+        Begin(ExecutionMode.FullCycle);
     }
 
     public void StartApplyActions(IEnumerable<PlannedAction> actions)
@@ -175,9 +196,10 @@ public sealed unsafe class Executor : IDisposable
         StatusMessage = null;
         waitingSince = null;
         usedMarketSlots.Clear();
-        fetchedThisSession.Clear();
-        // totalUniqueFetchTargets は StartFetchMarketPricesForRetainer で設定されるので
-        // ここでは触らない。他の Begin パスでは 0 のままで drain 判定が無効になる。
+        fetchRows = null;
+        fetchRowsPending = false;
+        RepricesApplied = 0;
+        RepricesSkipped = 0;
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
         // smart-start: 既に対象リテイナーの SellList を開いている場合は
@@ -190,8 +212,7 @@ public sealed unsafe class Executor : IDisposable
             if (firstMatchIdx >= 0)
             {
                 jobCursor = firstMatchIdx;
-                currentJobActions.Clear();
-                foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
+                EnterJob();
                 State = ExecutionState.PerformingAction;
                 log.Info($"[Restocker] Executor start (smart): mode={mode}, jobs={jobs.Count}, actions={TotalActions}, starting at active retainer '{activeName}'");
                 return;
@@ -254,6 +275,9 @@ public sealed unsafe class Executor : IDisposable
     private void Wait(TimeSpan span) => nextStepNoEarlierThan = DateTime.UtcNow + span;
     private void Stop(string reason)
     {
+        fetchRows = null;
+        fetchRowsPending = false;
+        Plugin.Instance?.ClearMarketWatcherExpected();
         State = ExecutionState.Stopped;
         StatusMessage = reason;
         log.Warning($"[Restocker] Executor stopped: {reason}");
@@ -324,8 +348,7 @@ public sealed unsafe class Executor : IDisposable
         // Refresh / Apply 共通: RetainerWatcher が PostRequestedUpdate で
         // GetRetainerMarketPrice 経由で各 listing の現在価格を埋めてくれるので、
         // ここでは PerformingAction に進めば良い (Refresh は Actions 空 → 即 close)。
-        currentJobActions.Clear();
-        foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
+        EnterJob();
 
         // saddle source の NewListing が混じっていれば、必要量を bag に pre-staging
         // してから出品 phase に入る。1 件ずつ stage→listing をやると server で
@@ -525,8 +548,138 @@ public sealed unsafe class Executor : IDisposable
         return long.TryParse(sb.ToString(), out var v) ? v : 0;
     }
 
+    // ---------------- Fork: job entry / fetch phase / live reads ----------------
+
+    private void EnterJob()
+    {
+        currentJobActions.Clear();
+        foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
+        fetchRows = null;
+        fetchRowsPending = jobs[jobCursor].FetchPrices;
+    }
+
+    /// <summary>Occupied RetainerMarket slots of the active retainer, read from the game now.</summary>
+    private List<LiveListing> ReadLiveListings()
+    {
+        var result = new List<LiveListing>();
+        var im = InventoryManager.Instance();
+        if (im == null) return result;
+        var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
+        if (market == null || !market->IsLoaded) return result;
+        for (var i = 0; i < market->Size; i++)
+        {
+            var it = market->GetInventorySlot(i);
+            if (it == null || it->ItemId == 0) continue;
+            result.Add(new LiveListing(
+                i,
+                it->ItemId,
+                (it->Flags & InventoryItem.ItemFlags.HighQuality) != 0,
+                (int)it->Quantity,
+                (long)im->GetRetainerMarketPrice((short)i)));
+        }
+        return result;
+    }
+
+    private void BuildFetchRowsFromLive()
+    {
+        fetchRowsPending = false;
+        var live = ReadLiveListings();
+        var unique = new HashSet<(uint, bool)>();
+        foreach (var l in live) unique.Add((l.ItemId, l.IsHQ));
+        fetchRows = new FetchRowQueue(live.Count, unique.Count);
+        jobFetchStartUtc = DateTime.UtcNow;
+        TotalActions += live.Count;
+        log.Information($"[Restocker] fetch phase: {jobs[jobCursor].RetainerName} rows={live.Count} unique={unique.Count}");
+    }
+
+    /// <summary>All rows walked. Manual fetch: notify the UI. Full cycle: plan + enqueue reprices.</summary>
+    private void OnFetchPhaseDone()
+    {
+        fetchRows = null;
+        Plugin.Instance?.ClearMarketWatcherExpected();
+        var job = jobs[jobCursor];
+        if (!job.AutoPlan)
+        {
+            try { OnFetchMarketCompleted?.Invoke(); }
+            catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchMarketCompleted threw"); }
+            return;
+        }
+
+        var live = ReadLiveListings();
+        var key = ActiveRetainerKey();
+        var since = jobFetchStartUtc;
+        var plan = AutoRepricePlanner.Plan(
+            key,
+            job.RetainerName,
+            live,
+            (item, hq) => marketCache != null && marketCache.HasDataSince(item, hq, since)
+                ? marketCache.GetRaw(item, hq)
+                : null,
+            configuration.FloorFor,
+            configuration.ToRepriceSettings(),
+            DateTime.UtcNow);
+
+        foreach (var row in plan.NotApplied)
+        {
+            RepricesSkipped++;
+            History?.Append(row);
+            if (row.Reason is RepriceReason.MaxDrop or RepriceReason.Error)
+                log.Warning($"[Restocker] not applied ({RepriceRules.ReasonCode(row.Reason)}): {job.RetainerName} slot={row.Slot} item={row.ItemId} hq={row.Hq} old={row.OldPrice:N0} lowest={row.LowestCompetitor:N0} target={row.NewPrice:N0}");
+        }
+        foreach (var a in plan.Actions) currentJobActions.Enqueue(a);
+        TotalActions += plan.Actions.Count;
+        log.Information($"[Restocker] full cycle plan: {job.RetainerName} listings={live.Count} reprice={plan.Actions.Count} not-applied={plan.NotApplied.Count}");
+    }
+
+    private string ActiveRetainerKey()
+    {
+        var rm = RetainerManager.Instance();
+        var active = rm != null ? rm->GetActiveRetainer() : null;
+        if (active == null) return string.Empty;
+        return RetainerSnapshot.MakeKey(Plugin.PlayerState.ContentId, active->RetainerId);
+    }
+
+    private void WriteHistory(PlannedAction a, long newPrice, bool applied, RepriceReason reason)
+    {
+        History?.Append(new PriceHistoryRow
+        {
+            UtcTime = DateTime.UtcNow,
+            Retainer = jobs.Count > jobCursor ? jobs[jobCursor].RetainerName : string.Empty,
+            Slot = a.ListingIndex,
+            ItemId = a.ItemId,
+            Hq = a.IsHQ,
+            Qty = a.Quantity,
+            OldPrice = a.OldPrice,
+            LowestCompetitor = a.LowestCompetitor,
+            NewPrice = newPrice,
+            Applied = applied,
+            Reason = reason,
+        });
+    }
+
     private void TickPerformingAction()
     {
+        // Fork: fetch phase runs before the job's actions.
+        if (fetchRowsPending) BuildFetchRowsFromLive();
+        if (fetchRows != null)
+        {
+            if (fetchRows.IsEmpty)
+            {
+                OnFetchPhaseDone();
+            }
+            else
+            {
+                // Expected item 0 = ignore every OfferingsReceived until the dialog tells us
+                // which item this row really is.
+                Plugin.Instance?.SetMarketWatcherExpected(0, false);
+                ClickListingSlot(fetchRows.CurrentRow);
+                State = ExecutionState.AwaitingContextMenu;
+                waitingSince = null;
+                Throttle();
+                return;
+            }
+        }
+
         // Refresh モードまたは Apply モードでアクション完了 → SellList を閉じる
         if (currentJobActions.Count == 0)
         {
@@ -539,28 +692,42 @@ public sealed unsafe class Executor : IDisposable
         switch (action.Kind)
         {
             case PlannedActionKind.FetchMarketPrice:
-                // listing 行クリックは ContextMenu を開く。そこから「価格を変更する」
-                // を選んで初めて RetainerSell ダイアログが開く。
-                marketCache?.GetType(); // suppress unused warning if cache disabled
-                Plugin.Instance?.SetMarketWatcherExpected(action.ItemId, action.IsHQ);
-                ClickListingSlot(action.ListingIndex);
-                State = ExecutionState.AwaitingContextMenu;
-                waitingSince = null;
-                Throttle();
+                // Fork: fetch rows live in FetchRowQueue now; a queued FetchMarketPrice is a no-op.
+                currentJobActions.Dequeue();
+                CompletedActions++;
                 return;
             case PlannedActionKind.Reprice:
                 // InventoryManager.SetRetainerMarketPrice で直接価格を書き換え。
                 // RetainerSell ダイアログを開かないので桁違いに速い。
                 {
-                    var im = InventoryManager.Instance();
-                    if (im != null)
-                    {
-                        im->SetRetainerMarketPrice((short)action.ListingIndex,
-                            (uint)Math.Min(action.UnitPrice, uint.MaxValue));
-                        log.Debug($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} price={action.UnitPrice}");
-                        CompletedActions++;
-                    }
                     currentJobActions.Dequeue();
+                    CompletedActions++;
+                    var im = InventoryManager.Instance();
+                    if (im == null) { Throttle(); return; }
+
+                    // Fork: the slot must still hold the item the plan was made for. A stale
+                    // snapshot used to reprice whatever item had moved into that slot.
+                    var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
+                    var slotItem = market != null && action.ListingIndex >= 0 && action.ListingIndex < market->Size
+                        ? market->GetInventorySlot(action.ListingIndex)
+                        : null;
+                    var slotItemId = slotItem != null ? slotItem->ItemId : 0u;
+                    var slotHq = slotItem != null && (slotItem->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                    if (slotItemId != action.ItemId || slotHq != action.IsHQ)
+                    {
+                        log.Warning($"[Restocker] reprice skipped: slot {action.ListingIndex} holds item={slotItemId} hq={slotHq}, plan expected item={action.ItemId} hq={action.IsHQ} (stale plan)");
+                        RepricesSkipped++;
+                        WriteHistory(action, action.UnitPrice, false, RepriceReason.Error);
+                        Throttle();
+                        return;
+                    }
+                    if (action.OldPrice == 0) action.OldPrice = (long)im->GetRetainerMarketPrice((short)action.ListingIndex);
+
+                    im->SetRetainerMarketPrice((short)action.ListingIndex,
+                        (uint)Math.Min(action.UnitPrice, uint.MaxValue));
+                    log.Information($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} item={action.ItemId} hq={action.IsHQ} {action.OldPrice:N0} -> {action.UnitPrice:N0} ({RepriceRules.ReasonCode(action.Reason)})");
+                    RepricesApplied++;
+                    WriteHistory(action, action.UnitPrice, true, action.Reason);
                     Throttle();
                     return;
                 }
@@ -699,7 +866,8 @@ public sealed unsafe class Executor : IDisposable
             {
                 // 1 件詰まっても残り全部を巻き込みたくないので、stop ではなく skip。
                 log.Warning("[Restocker] ContextMenu did not open, skipping this action");
-                if (currentJobActions.Count > 0) currentJobActions.Dequeue();
+                if (fetchRows != null) fetchRows.SkipCurrentRow();
+                else if (currentJobActions.Count > 0) currentJobActions.Dequeue();
                 CompletedActions++;
                 Plugin.Instance?.ClearMarketWatcherExpected();
                 waitingSince = null;
@@ -716,7 +884,9 @@ public sealed unsafe class Executor : IDisposable
     private void TickClickingPutUpForSale()
     {
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
-        var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
+        var nextKind = fetchRows != null
+            ? PlannedActionKind.FetchMarketPrice
+            : currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
 
         // FetchMarketPrice (= 既存出品の listing 行クリック後) は「価格を変更する」を選ぶ。
         // それ以外 (NewListing 系) は「マーケットに出品する」を選ぶ。
@@ -1007,6 +1177,9 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickFetchAwaitingSellDialog()
     {
+        if (fetchRows == null || fetchRows.IsEmpty) { State = ExecutionState.PerformingAction; return; }
+        var row = fetchRows.CurrentRow;
+
         var addon = AddonHelper.GetVisible("RetainerSell");
         if (addon == null)
         {
@@ -1019,16 +1192,14 @@ public sealed unsafe class Executor : IDisposable
             // 2.5s 経って開いていなければ 1 回だけ click 再送
             if (!fetchSlotClickRetried && elapsed > TimeSpan.FromSeconds(2.5))
             {
-                var action = currentJobActions.Peek();
-                log.Warning($"[Restocker] RetainerSell did not open within 2.5s; retrying click on slot {action.ListingIndex}");
-                ClickListingSlot(action.ListingIndex);
+                log.Warning($"[Restocker] RetainerSell did not open within 2.5s; retrying click on row {row}");
+                ClickListingSlot(row);
                 fetchSlotClickRetried = true;
             }
             if (elapsed > TimeSpan.FromSeconds(6))
             {
-                var action = currentJobActions.Peek();
-                log.Warning($"[Restocker] RetainerSell never opened for item={action.ItemId} hq={action.IsHQ} slot={action.ListingIndex}, skipping. (RetainerSellList open={AddonHelper.IsOpen("RetainerSellList")})");
-                currentJobActions.Dequeue();
+                log.Warning($"[Restocker] RetainerSell never opened for row {row}, skipping. (RetainerSellList open={AddonHelper.IsOpen("RetainerSellList")})");
+                fetchRows.SkipCurrentRow();
                 CompletedActions++;
                 waitingSince = null;
                 fetchSlotClickRetried = false;
@@ -1040,47 +1211,37 @@ public sealed unsafe class Executor : IDisposable
         waitingSince = null;
         fetchSlotClickRetried = false;
 
-        var act = currentJobActions.Peek();
-
         // dialog のアイテム名から item id を逆引き。snapshot の slot index は画面 row と
         // 一致しないため、行を click した結果開いた dialog の表示アイテムを真として扱う。
         var sell = (AddonRetainerSell*)addon;
         var dialogName = sell->ItemName != null ? sell->ItemName->NodeText.ToString() ?? string.Empty : string.Empty;
         var (resolvedItemId, resolvedIsHq) = ResolveItemFromDialogName(dialogName);
-        if (resolvedItemId == 0)
+
+        // Fork (yagi2/Restocker#1): skip paths only close the dialog. The single row advance
+        // happens in TickFetchAwaitingSellListAfter via FetchRowQueue.CompleteCurrentRow.
+        var decision = fetchRows.OnDialogResolved(resolvedItemId, resolvedIsHq);
+        if (decision != FetchRowDecision.Fetch)
         {
-            log.Warning($"[Restocker] could not resolve item id from dialog name '{dialogName}'; skipping");
+            if (decision == FetchRowDecision.SkipUnresolved)
+                log.Warning($"[Restocker] could not resolve item id from dialog name '{dialogName}' (row {row}); skipping");
+            else
+                log.Information($"[Restocker] skip duplicate fetch for item={resolvedItemId} hq={resolvedIsHq} (row {row})");
             Callback.Fire(addon, true, -1);
-            currentJobActions.Dequeue();
-            CompletedActions++;
             Plugin.Instance?.ClearMarketWatcherExpected();
+            Plugin.Instance?.SetMarketWatcherExpected(0, false);
             State = ExecutionState.FetchAwaitingSellListAfter;
             Throttle();
             return;
         }
-        act.ItemId = resolvedItemId;
-        act.IsHQ = resolvedIsHq;
 
-        // 同じ (item, hq) を 1 ジョブ中に二度引かない。listing で同種アイテムが
-        // 並んでいるとき、最初の 1 件だけ ComparePrices を発火する。
-        if (fetchedThisSession.Contains((resolvedItemId, resolvedIsHq)))
-        {
-            log.Information($"[Restocker] skip duplicate fetch for item={resolvedItemId} hq={resolvedIsHq} (already fetched this session)");
-            Callback.Fire(addon, true, -1);
-            currentJobActions.Dequeue();
-            CompletedActions++;
-            Plugin.Instance?.ClearMarketWatcherExpected();
-            State = ExecutionState.FetchAwaitingSellListAfter;
-            Throttle();
-            return;
-        }
-        fetchedThisSession.Add((resolvedItemId, resolvedIsHq));
-
+        fetchItemId = resolvedItemId;
+        fetchIsHq = resolvedIsHq;
         Plugin.Instance?.SetMarketWatcherExpected(resolvedItemId, resolvedIsHq);
+        fetchClickedAtUtc = DateTime.UtcNow;
 
         // ComparePrices を click。AddonRetainerSell の event id 4
         Callback.Fire(addon, true, 4);
-        log.Information($"[Restocker] clicked ComparePrices for item={resolvedItemId} hq={resolvedIsHq} (row={act.ListingIndex}) dialog='{dialogName}'");
+        log.Information($"[Restocker] clicked ComparePrices for item={resolvedItemId} hq={resolvedIsHq} (row={row}) dialog='{dialogName}'");
         State = ExecutionState.FetchAwaitingMarketData;
         waitingSince = DateTime.UtcNow;
         Throttle();
@@ -1088,16 +1249,17 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickFetchAwaitingMarketData()
     {
-        var action = currentJobActions.Peek();
-        var ready = marketCache != null && marketCache.HasData(action.ItemId, action.IsHQ);
+        // Fork: only data written after this ComparePrices click counts. Upstream accepted any
+        // cached entry, so a second fetch of the same item returned the previous result instantly.
+        var ready = marketCache != null && marketCache.HasDataSince(fetchItemId, fetchIsHq, fetchClickedAtUtc);
         var timeout = waitingSince != null && DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(6);
         if (!ready && !timeout) return;
 
-        if (!ready) log.Warning($"[Restocker] market fetch timeout for item={action.ItemId} hq={action.IsHQ} (ItemSearchResult open={AddonHelper.IsOpen("ItemSearchResult")})");
-        else log.Information($"[Restocker] market data ready for item={action.ItemId} hq={action.IsHQ}, lowest={marketCache!.GetLowest(action.ItemId, action.IsHQ)}");
+        if (!ready) log.Warning($"[Restocker] market fetch timeout for item={fetchItemId} hq={fetchIsHq} (ItemSearchResult open={AddonHelper.IsOpen("ItemSearchResult")})");
+        else log.Information($"[Restocker] market data ready for item={fetchItemId} hq={fetchIsHq}, competitors={marketCache!.GetRaw(fetchItemId, fetchIsHq).Count}, lowest={marketCache.GetLowest(fetchItemId, fetchIsHq)}");
 
-        // 1 件分の fetch 完了。expected フラグはクリアして、次の listing に進む。
-        Plugin.Instance?.ClearMarketWatcherExpected();
+        // 1 件分の fetch 完了。expected は 0 (= 全部無視) に戻して次の listing に進む。
+        Plugin.Instance?.SetMarketWatcherExpected(0, false);
 
         // ItemSearchResult を閉じる → RetainerSell に戻る
         var sr = AddonHelper.GetVisible("ItemSearchResult");
@@ -1138,29 +1300,15 @@ public sealed unsafe class Executor : IDisposable
         if (!AddonHelper.IsOpen("RetainerSellList")) return;
 
         waitingSince = null;
-        currentJobActions.Dequeue();
-        CompletedActions++;
-
-        // snapshot 上の unique items を全部取り終えたら、残りの actions は同じ item の
-        // 重複でしかない。dialog を開いて閉じる無駄な往復になるので drain して即終了。
-        if (totalUniqueFetchTargets > 0
-            && fetchedThisSession.Count >= totalUniqueFetchTargets
-            && currentJobActions.Count > 0)
+        if (fetchRows != null)
         {
-            var dropped = currentJobActions.Count;
-            log.Information($"[Restocker] all {totalUniqueFetchTargets} unique items fetched; draining {dropped} duplicate row(s)");
-            while (currentJobActions.Count > 0)
-            {
-                currentJobActions.Dequeue();
-                CompletedActions++;
-            }
+            // The ONLY row advance for a row whose dialog opened (fetch, duplicate or unresolved).
+            var drained = fetchRows.CompleteCurrentRow();
+            CompletedActions += 1 + drained;
+            if (drained > 0)
+                log.Information($"[Restocker] all unique items fetched; draining {drained} duplicate row(s)");
         }
 
-        if (currentJobActions.Count == 0)
-        {
-            try { OnFetchMarketCompleted?.Invoke(); }
-            catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchMarketCompleted threw"); }
-        }
         State = ExecutionState.PerformingAction;
         // 次の listing click までの cooldown。server 側の前リクエストの応答遅延が
         // 次の検索結果に紛れ込むのを抑えるため。

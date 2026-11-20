@@ -14,4 +14,10 @@ public sealed class RetainerVisitJob
 
     /// <summary>このリテイナーで処理するアクション列。Refresh モードでは空。</summary>
     public required List<PlannedAction> Actions { get; init; }
+
+    /// <summary>Fork: walk the sell list rows and fetch market prices before running Actions.</summary>
+    public bool FetchPrices { get; init; }
+
+    /// <summary>Fork: after fetching, plan Reprice actions with the price rules and run them.</summary>
+    public bool AutoPlan { get; init; }
 }

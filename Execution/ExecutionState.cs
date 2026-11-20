@@ -7,6 +7,9 @@ public enum ExecutionMode
 
     /// <summary>各リテイナーで PlannedAction (Reprice / NewListing) を実行する。</summary>
     ApplyActions,
+
+    /// <summary>Fork: each retainer -> fetch live prices -> plan by rules -> apply -> next.</summary>
+    FullCycle,
 }
 
 public enum ExecutionState

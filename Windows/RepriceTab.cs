@@ -21,6 +21,7 @@ public sealed class RepriceTab
     private readonly Executor executor;
     private readonly ConfirmDialog confirmDialog;
     private readonly MarketCache marketCache;
+    private readonly AutoCycleController autoCycle;
     private string filter = string.Empty;
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
@@ -32,8 +33,9 @@ public sealed class RepriceTab
     /// <summary>適用前のプランリスト。</summary>
     private readonly List<RepricePlan> pendingPlans = new();
 
-    public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
+    public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache, AutoCycleController autoCycle)
     {
+        this.autoCycle = autoCycle;
         this.configuration = configuration;
         this.executor = executor;
         this.confirmDialog = confirmDialog;
@@ -67,10 +69,56 @@ public sealed class RepriceTab
         ImGui.SameLine();
         DrawApplyButton();
 
+        DrawCycleControls();
+
         if (!string.IsNullOrEmpty(lastMatchSummary))
         {
             ImGui.TextColored(new System.Numerics.Vector4(0.85f, 0.85f, 0.4f, 1f), lastMatchSummary);
         }
+    }
+
+    /// <summary>Fork: one-click full cycle + timed auto cycle toggle.</summary>
+    private void DrawCycleControls()
+    {
+        var bellOpen = AutoCycleController.IsBellOpen();
+
+        var canRun = bellOpen && !executor.IsRunning;
+        if (!canRun) ImGui.BeginDisabled();
+        if (ImGui.Button("Full cycle (once)##restocky-once"))
+            autoCycle.RunOnce();
+        if (!canRun) ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Every retainer: fetch live prices, lowest competitor -undercut, apply with the floor / max-drop guards. No confirm dialog.");
+
+        ImGui.SameLine();
+        var enabled = autoCycle.Enabled;
+        if (!enabled && !bellOpen) ImGui.BeginDisabled();
+        if (ImGui.Checkbox($"Auto cycle every {configuration.AutoCycleIntervalMinutes} min##restocky-auto", ref enabled))
+        {
+            if (enabled) autoCycle.Enable();
+            else autoCycle.Disable("turned off");
+        }
+        if (!autoCycle.Enabled && !bellOpen) ImGui.EndDisabled();
+
+        if (autoCycle.Enabled)
+        {
+            ImGui.SameLine();
+            if (executor.IsRunning)
+                ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.9f, 0.5f, 1f), "running…");
+            else if (autoCycle.NextRunUtc is { } next)
+            {
+                var left = next - System.DateTime.UtcNow;
+                if (left < System.TimeSpan.Zero) left = System.TimeSpan.Zero;
+                ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.9f, 0.5f, 1f), $"next in {(int)left.TotalMinutes}:{left.Seconds:00}");
+            }
+            if (autoCycle.ConsecutiveFailures > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new System.Numerics.Vector4(1f, 0.6f, 0.4f, 1f), $"failures {autoCycle.ConsecutiveFailures}/{configuration.AutoCycleMaxFailures}");
+            }
+        }
+        if (!string.IsNullOrEmpty(autoCycle.LastSummary))
+            ImGui.TextDisabled(autoCycle.LastSummary);
     }
 
     private void DrawApplyButton()
@@ -111,6 +159,7 @@ public sealed class RepriceTab
                 Quantity = p.Quantity,
                 UnitPrice = p.NewPrice,
                 ListingIndex = p.ListingIndex,
+                OldPrice = p.OldPrice,
             });
         }
         return result;
@@ -221,9 +270,20 @@ public sealed class RepriceTab
         return nowOpen;
     }
 
+    /// <summary>
+    /// Fork: edited prices are keyed by slot AND item/HQ. Upstream keyed by slot only, so a
+    /// price computed for one item showed up (and was applied) on whatever item later sat in
+    /// that slot after the listings changed.
+    /// </summary>
+    private static string EditKey(string snapKey, ListingEntry l)
+        => $"{snapKey}#{l.ListingIndex}#{l.ItemId}{(l.IsHQ ? "h" : "n")}";
+
     /// <summary>fetch 完了後に editedPrice に「最安値 + offset」を入れる。プランには勝手に積まない。</summary>
-    private void ApplyMatchLowestForRetainer(RetainerSnapshot snap, long offset = -1)
+    private void ApplyMatchLowestForRetainer(RetainerSnapshot capturedSnap, long offset = -1)
     {
+        // Fork: the fetch reopened the sell list, so RetainerWatcher stored a NEW snapshot
+        // object. The one captured at click time is stale; always use the current one.
+        var snap = configuration.Snapshots.TryGetValue(capturedSnap.Key, out var fresh) ? fresh : capturedSnap;
         var seen = new HashSet<(uint, bool)>();
         var missing = new HashSet<(uint, bool, string)>();
         var applied = 0;
@@ -253,7 +313,7 @@ public sealed class RepriceTab
             }
             var newPrice = lowest + offset;
             if (newPrice < 1) newPrice = 1;
-            editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = newPrice;
+            editedPrice[EditKey(snap.Key, listing)] = newPrice;
             applied++;
             Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} offset={offset} -> new={newPrice:N0}");
         }
@@ -271,7 +331,7 @@ public sealed class RepriceTab
         var added = 0;
         foreach (var listing in snap.Listings)
         {
-            var key = $"{snap.Key}#{listing.ListingIndex}";
+            var key = EditKey(snap.Key, listing);
             if (!editedPrice.TryGetValue(key, out var price)) continue;
             if (price <= 0) continue;
             if (price == listing.UnitPrice) continue; // 同額は積まない
@@ -354,7 +414,7 @@ public sealed class RepriceTab
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(l.UnitPrice == 0 ? Strings.PriceUnknown : l.UnitPrice.ToString("N0"));
             ImGui.TableNextColumn();
-            DrawPriceInput($"{snap.Key}#{l.ListingIndex}");
+            DrawPriceInput(EditKey(snap.Key, l));
             ImGui.TableNextColumn();
             DrawFillButton(snap, l);
             ImGui.TableNextColumn();
@@ -367,7 +427,7 @@ public sealed class RepriceTab
     /// <summary>この行で入力された価格を、同じリテイナーの他の全 listing の editedPrice にコピー。</summary>
     private void DrawFillButton(RetainerSnapshot snap, ListingEntry sourceListing)
     {
-        var sourceKey = $"{snap.Key}#{sourceListing.ListingIndex}";
+        var sourceKey = EditKey(snap.Key, sourceListing);
         var sourcePrice = editedPrice.GetValueOrDefault(sourceKey, 0);
         var canFill = sourcePrice > 0;
         if (!canFill) ImGui.BeginDisabled();
@@ -376,7 +436,7 @@ public sealed class RepriceTab
             foreach (var l in snap.Listings)
             {
                 if (l.ListingIndex == sourceListing.ListingIndex) continue;
-                editedPrice[$"{snap.Key}#{l.ListingIndex}"] = sourcePrice;
+                editedPrice[EditKey(snap.Key, l)] = sourcePrice;
             }
             Plugin.Log.Information($"[Restocker] fill: copied {sourcePrice} to {snap.Listings.Count - 1} other listings on {snap.RetainerName}");
         }
@@ -397,7 +457,7 @@ public sealed class RepriceTab
 
     private void DrawAddPlanButton(RetainerSnapshot snap, ListingEntry l, string name)
     {
-        var key = $"{snap.Key}#{l.ListingIndex}";
+        var key = EditKey(snap.Key, l);
         var price = editedPrice.GetValueOrDefault(key, 0);
         var canAdd = price > 0 && price != l.UnitPrice;
 

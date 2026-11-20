@@ -32,6 +32,16 @@ public sealed class PlannedAction
     /// <see cref="CharacterSnapshot.MakeKey"/> 形式の文字列が入る。
     /// </summary>
     public string SourceKey { get; set; } = string.Empty;
+
+    // ---- Fork: price-history context for Reprice actions (not persisted) ----
+
+    /// <summary>Asking price when the plan was made.</summary>
+    public long OldPrice { get; set; }
+
+    /// <summary>Lowest competitor price the plan was based on (0 = unknown / manual).</summary>
+    public long LowestCompetitor { get; set; }
+
+    public Restocker.Market.RepriceReason Reason { get; set; } = Restocker.Market.RepriceReason.Manual;
 }
 
 public enum PlannedActionKind

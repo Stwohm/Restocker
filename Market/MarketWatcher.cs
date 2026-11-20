@@ -56,9 +56,21 @@ public sealed unsafe class MarketWatcher : IDisposable
     {
         try
         {
-            if (offerings.ItemListings.Count == 0) return;
             if (offerings.RequestId == lastRequestId) return;
             lastRequestId = offerings.RequestId;
+
+            // Fork: an empty board for the item we are fetching means "no competitor".
+            // Record that, otherwise the executor waits for its 6s timeout every time.
+            if (offerings.ItemListings.Count == 0)
+            {
+                if (expectedItemId is { } exp && exp != 0)
+                {
+                    Cache.Replace(exp, false, Array.Empty<long>());
+                    Cache.Replace(exp, true, Array.Empty<long>());
+                    log.Information($"[Restocker] OfferingsReceived item={exp} empty board -> no competitor");
+                }
+                return;
+            }
 
             var itemId = offerings.ItemListings[0].ItemId;
             if (itemId == 0) return;
@@ -66,7 +78,7 @@ public sealed unsafe class MarketWatcher : IDisposable
             // 自動 fetch 中は「期待アイテム」と一致するものだけ採用する。
             // server が古いリクエストの応答を遅延配送してくると、現在 fetch 中の
             // listing と違うアイテムの結果が「最新の cache」になってしまうため。
-            if (expectedItemId.HasValue && itemId != expectedItemId.Value)
+            if (expectedItemId.HasValue && (expectedItemId.Value == 0 || itemId != expectedItemId.Value))
             {
                 log.Information($"[Restocker] OfferingsReceived for item={itemId} ignored (expected {expectedItemId.Value})");
                 return;
@@ -77,8 +89,10 @@ public sealed unsafe class MarketWatcher : IDisposable
             var dump = new System.Text.StringBuilder();
             dump.Append($"[Restocker] OfferingsReceived item={itemId} count={offerings.ItemListings.Count} reqId={offerings.RequestId}");
 
-            long? nqPrice = null;
-            long? hqPrice = null;
+            // Fork: keep every competitor price (ascending as delivered) so
+            // LowestPriceResolver can actually drop bait listings. Upstream kept only the first.
+            var nqPrices = new System.Collections.Generic.List<long>();
+            var hqPrices = new System.Collections.Generic.List<long>();
             for (var idx = 0; idx < offerings.ItemListings.Count; idx++)
             {
                 var listing = offerings.ItemListings[idx];
@@ -91,14 +105,16 @@ public sealed unsafe class MarketWatcher : IDisposable
 
                 if (isOwn) continue;
                 if (price <= 0) continue;
-                if (listing.IsHq) { if (hqPrice == null) hqPrice = price; }
-                else { if (nqPrice == null) nqPrice = price; }
+                if (listing.IsHq) hqPrices.Add(price);
+                else nqPrices.Add(price);
             }
 
-            if (nqPrice.HasValue) Cache.Replace(itemId, false, new[] { nqPrice.Value });
-            if (hqPrice.HasValue) Cache.Replace(itemId, true, new[] { hqPrice.Value });
+            // Both flags are always written (possibly empty) so "no HQ competitor" is a known
+            // answer, not a timeout.
+            Cache.Replace(itemId, false, nqPrices);
+            Cache.Replace(itemId, true, hqPrices);
 
-            dump.Append($"\n  → adopted nq={nqPrice?.ToString("N0") ?? "-"}  hq={hqPrice?.ToString("N0") ?? "-"}");
+            dump.Append($"\n  → nq={nqPrices.Count} (lowest {Cache.GetLowest(itemId, false):N0})  hq={hqPrices.Count} (lowest {Cache.GetLowest(itemId, true):N0})");
             log.Information(dump.ToString());
         }
         catch (Exception ex)

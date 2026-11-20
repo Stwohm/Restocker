@@ -37,7 +37,12 @@ public sealed class ProgressWindow : Window
     public override void Draw()
     {
         // モード行
-        var modeLabel = executor.Mode == ExecutionMode.RefreshAll ? Strings.ProgressModeRefresh : Strings.ProgressModeApply;
+        var modeLabel = executor.Mode switch
+        {
+            ExecutionMode.RefreshAll => Strings.ProgressModeRefresh,
+            ExecutionMode.FullCycle => "Full cycle",
+            _ => Strings.ProgressModeApply,
+        };
         ImGui.TextUnformatted($"{Strings.ProgressMode}: {modeLabel}");
 
         // state 行
