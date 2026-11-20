@@ -83,11 +83,31 @@ public sealed class LowStockService : IDisposable
         return lowest > 0 ? Math.Max(1, lowest - configuration.UndercutGil) : 0;
     }
 
-    public List<PlannedAction> PlanRestock(LowStockEntry e, int targetUnits)
+    public List<PlannedAction> PlanRestock(LowStockEntry e, int targetUnits, long unitPrice)
     {
         var free = MyRetainers().ToDictionary(s => s.Key, s => Math.Max(0, Planner.MaxListingSlots - s.Listings.Count));
         return RestockPlanner.Plan(e.ItemId, e.IsHq, targetUnits, ListedUnits(e.ItemId, e.IsHq),
-            PerListing(e), Price(e), Sources(e.ItemId, e.IsHq), free);
+            PerListing(e), unitPrice, Sources(e.ItemId, e.IsHq), free);
+    }
+
+    /// <summary>
+    /// Market lowest (bait filtered) - undercut from the last fetch, with when it was fetched.
+    /// Null when the item was never fetched in this session.
+    /// </summary>
+    public (long Price, DateTime FetchedUtc)? Suggestion(LowStockEntry e)
+    {
+        var at = marketCache.UpdatedUtc(e.ItemId, e.IsHq);
+        if (at == null) return null;
+        var lowest = marketCache.GetLowest(e.ItemId, e.IsHq);
+        if (lowest <= 0) return null;
+        return (Math.Max(1, lowest - configuration.UndercutGil), at.Value);
+    }
+
+    /// <summary>A retainer (of this character) that has the item listed, so its sell list can be used to compare prices.</summary>
+    public string? RetainerToCompareFrom(LowStockEntry e)
+    {
+        var keys = MyRetainers().Select(s => s.Key).ToHashSet();
+        return tracker.ActiveFor(e.ItemId, e.IsHq).Select(r => r.RetainerKey).FirstOrDefault(keys.Contains);
     }
 
     private void OnUpdate(IFramework _)

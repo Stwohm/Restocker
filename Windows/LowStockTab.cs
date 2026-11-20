@@ -17,6 +17,8 @@ public sealed class LowStockTab
     private readonly LowStockService service;
     private string search = string.Empty;
     private readonly Dictionary<(uint, bool), int> restockTo = new();
+    /// <summary>Price typed or picked for the next restock (session only).</summary>
+    private readonly Dictionary<(uint, bool), long> restockPrice = new();
     private string? lastMessage;
 
     public LowStockTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, LowStockService service)
@@ -79,7 +81,7 @@ public sealed class LowStockTab
 
         var bellOpen = AddonHelper.IsOpen("RetainerList");
         const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingStretchProp;
-        if (!ImGui.BeginTable("##lowstock", 9, flags, new System.Numerics.Vector2(0, Math.Max(120f, ImGui.GetContentRegionAvail().Y)))) return;
+        if (!ImGui.BeginTable("##lowstock", 10, flags, new System.Numerics.Vector2(0, Math.Max(120f, ImGui.GetContentRegionAvail().Y)))) return;
         ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 0.3f);
         ImGui.TableSetupColumn("Listed", ImGuiTableColumnFlags.WidthFixed, 50);
@@ -87,6 +89,7 @@ public sealed class LowStockTab
         ImGui.TableSetupColumn("Alert ≤", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn("Per listing", ImGuiTableColumnFlags.WidthFixed, 75);
         ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 100);
+        ImGui.TableSetupColumn("Market -undercut", ImGuiTableColumnFlags.WidthFixed, 190);
         ImGui.TableSetupColumn("Restock to", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn("##restock", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn("##remove", ImGuiTableColumnFlags.WidthFixed, 30);
@@ -118,11 +121,44 @@ public sealed class LowStockTab
             if (ImGui.InputInt($"##per-{id}", ref per, 0)) { e.PerListing = Math.Max(0, per); configuration.Save(); }
             if (ImGui.IsItemHovered()) ImGui.SetTooltip($"0 = same as your current listings ({service.PerListing(e)})");
 
+            // Price for this restock: typed by the user, or picked from the market suggestion with "Use".
             ImGui.TableNextColumn();
-            var price = (int)Math.Min(e.Price, int.MaxValue);
+            var key = (e.ItemId, e.IsHq);
+            if (!restockPrice.TryGetValue(key, out var chosen)) chosen = service.Price(e);
+            var price = (int)Math.Min(chosen, int.MaxValue);
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputInt($"##price-{id}", ref price, 0)) { e.Price = Math.Max(0, price); configuration.Save(); }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip($"0 = your current listing price, else market lowest -undercut (now {service.Price(e):N0})");
+            if (ImGui.InputInt($"##price-{id}", ref price, 0)) restockPrice[key] = Math.Max(0, price);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Price for the new listings. Starts at your current listing price.");
+
+            ImGui.TableNextColumn();
+            var sug = service.Suggestion(e);
+            if (sug is { } s)
+            {
+                var age = DateTime.UtcNow - s.FetchedUtc;
+                if (ImGui.SmallButton($"Use {s.Price:N0}##use-{id}")) restockPrice[key] = s.Price;
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"market lowest -{configuration.UndercutGil}, fetched {(int)age.TotalMinutes} min ago");
+                ImGui.SameLine();
+                ImGui.TextDisabled($"{(int)age.TotalMinutes}m");
+            }
+            else
+            {
+                ImGui.TextDisabled("not fetched");
+            }
+            ImGui.SameLine();
+            var compareFrom = service.RetainerToCompareFrom(e);
+            var canCheck = bellOpen && !executor.IsRunning && compareFrom != null;
+            if (!canCheck) ImGui.BeginDisabled();
+            if (ImGui.SmallButton($"Check##chk-{id}") && compareFrom != null)
+            {
+                executor.OnFetchMarketCompleted = null;
+                executor.OnFetchJobCompleted = null;
+                executor.StartFetchMarketPricesForRetainer(compareFrom);
+            }
+            if (!canCheck) ImGui.EndDisabled();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(compareFrom == null
+                    ? "No listing of this item on your retainers to compare prices from; type a price."
+                    : bellOpen ? "Fetch live market prices from the retainer that lists it" : "open the summoning bell first");
 
             ImGui.TableNextColumn();
             var to = restockTo.TryGetValue((e.ItemId, e.IsHq), out var t) ? t : e.Target;
@@ -138,10 +174,10 @@ public sealed class LowStockTab
             ImGui.TableNextColumn();
             var can = bellOpen && !executor.IsRunning && to > listed;
             if (!can) ImGui.BeginDisabled();
-            if (ImGui.SmallButton($"Restock##rs-{id}")) Restock(e, to);
+            if (ImGui.SmallButton($"Restock##rs-{id}")) Restock(e, to, restockPrice.TryGetValue(key, out var rp) ? rp : service.Price(e));
             if (!can) ImGui.EndDisabled();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(bellOpen ? $"List up to {to} units from retainer inventory, bag or saddlebag" : "open the summoning bell first");
+                ImGui.SetTooltip(bellOpen ? $"List up to {to} units now (retainer inventory, then bag, then saddlebag) at the price on this row" : "open the summoning bell first");
 
             ImGui.TableNextColumn();
             if (ImGui.SmallButton($"x##rm-{id}")) remove = e;
@@ -155,18 +191,20 @@ public sealed class LowStockTab
         }
     }
 
-    private void Restock(LowStockEntry e, int target)
+    private void Restock(LowStockEntry e, int target, long price)
     {
-        var actions = service.PlanRestock(e, target);
+        var actions = service.PlanRestock(e, target, price);
         if (actions.Count == 0)
         {
-            var why = service.Price(e) <= 0 ? "no price (set one, or fetch market prices first)"
+            var why = price <= 0 ? "no price (type one, or Check / Use the market price)"
                 : service.Sources(e.ItemId, e.IsHq).Count == 0 ? "none in retainer inventories / bag / saddlebag"
                 : "no free market slot";
             lastMessage = $"{ItemName(e.ItemId)}: nothing to list: {why}";
             return;
         }
-        lastMessage = null;
-        confirmDialog.Request(actions, list => executor.StartApplyActions(list));
+        // Direct: the row already shows item, units and price; no extra confirm dialog.
+        lastMessage = $"{ItemName(e.ItemId)}: listing {actions.Sum(a => a.Quantity)} unit(s) in {actions.Count} listing(s) at {price:N0}";
+        Plugin.ChatPrint(lastMessage);
+        executor.StartApplyActions(actions);
     }
 }

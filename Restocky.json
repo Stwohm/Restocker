@@ -13,5 +13,5 @@
     "list"
   ],
   "RepoUrl": "https://github.com/Stwohm/Restocker",
-  "Changelog": "0.3.2.0 — Per-item price change lines in chat after each cycle; Low stock tab with alerts and Restock. 0.3.1.0 — Auto-advance retainer Talk dialogues, Full cycle (I set prices) button, scrollable plan lists, your price / market lowest beside floors, bait-listing notices, configurable chat channel (default Retainer Sale). 0.3.0.0 — Listing lifecycle and competitor tracking, AutoRetainer coordination, materia name fix, editable interval."
+  "Changelog": "0.3.2.0 — Per-item price change lines in chat after each cycle; Low stock tab with alerts, market price suggestion (lowest -undercut, Use / Check) and one-click Restock. 0.3.1.0 — Auto-advance retainer Talk dialogues, Full cycle (I set prices) button, scrollable plan lists, your price / market lowest beside floors, bait-listing notices, configurable chat channel (default Retainer Sale). 0.3.0.0 — Listing lifecycle and competitor tracking, AutoRetainer coordination, materia name fix, editable interval."
 }

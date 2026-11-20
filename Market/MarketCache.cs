@@ -63,6 +63,10 @@ public sealed class MarketCache
 
     public bool HasData(uint itemId, bool isHQ) => store.ContainsKey((itemId, isHQ));
 
+    /// <summary>When the entry was last written, or null when never fetched.</summary>
+    public DateTime? UpdatedUtc(uint itemId, bool isHQ)
+        => store.TryGetValue((itemId, isHQ), out var e) ? e.UpdatedUtc : null;
+
     /// <summary>True when the entry was written at or after <paramref name="sinceUtc"/>.</summary>
     public bool HasDataSince(uint itemId, bool isHQ, DateTime sinceUtc)
         => store.TryGetValue((itemId, isHQ), out var e) && e.UpdatedUtc >= sinceUtc;
