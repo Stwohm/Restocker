@@ -163,6 +163,34 @@ public class RepriceRulesTests
     }
 
     [Fact]
+    public void Lemonette_bait_is_reported_with_seller_quantity_and_price()
+    {
+        var listings = new List<LiveListing> { new(9, 27835, false, 99, 943) };
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[]
+        {
+            new MarketOffer(520, "Meowsugar", 190),
+            new MarketOffer(944, "Arthurrr", 128),
+            new MarketOffer(945, "Izzywizzy", 10),
+            new MarketOffer(997, "Mineralprincess", 198),
+        };
+        var r = AutoRepricePlanner.Plan("k", "RetainerB", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
+        var bait = Assert.Single(r.Baits);
+        Assert.Equal(944, bait.RealLowest);
+        Assert.Equal("Meowsugar", Assert.Single(bait.Baits).Seller);
+        Assert.Equal("Lemonette [RetainerB]: bait listing skipped: Meowsugar 190x @ 520 (priced against 944)",
+            BaitFinder.Format("Lemonette", bait));
+    }
+
+    [Fact]
+    public void No_bait_notice_when_lowest_is_used()
+    {
+        var listings = new List<LiveListing> { new(0, 1, false, 1, 1_000) };
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(900, "A", 1), new MarketOffer(950, "B", 1) };
+        var r = AutoRepricePlanner.Plan("k", "R", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
+        Assert.Empty(r.Baits);
+    }
+
+    [Fact]
     public void History_append_writes_header_once()
     {
         var path = Path.Combine(Path.GetTempPath(), "restocky-test-" + System.Guid.NewGuid() + ".csv");

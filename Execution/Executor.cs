@@ -87,6 +87,9 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>Start of the current job's fetch phase; the planner only trusts data newer than this.</summary>
     private DateTime jobFetchStartUtc;
 
+    /// <summary>Bait notices already shown this session (key = BaitFinder.Key).</summary>
+    private readonly HashSet<string> reportedBaits = new();
+
     /// <summary>Fork: append-only price-history.csv. Null = disabled.</summary>
     public PriceHistoryLog? History { get; set; }
 
@@ -652,6 +655,15 @@ public sealed unsafe class Executor : IDisposable
             History?.Append(row);
             if (row.Reason is RepriceReason.MaxDrop or RepriceReason.Error)
                 log.Warning($"[Restocker] not applied ({RepriceRules.ReasonCode(row.Reason)}): {job.RetainerName} slot={row.Slot} item={row.ItemId} hq={row.Hq} old={row.OldPrice:N0} lowest={row.LowestCompetitor:N0} target={row.NewPrice:N0}");
+        }
+        foreach (var b in plan.Baits)
+        {
+            if (!reportedBaits.Add(BaitFinder.Key(b))) continue;
+            var name = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>().TryGetRow(b.ItemId, out var row)
+                ? row.Name.ExtractText() : $"#{b.ItemId}";
+            var msg = BaitFinder.Format(name, b);
+            log.Information($"[Restocker] {msg}");
+            Plugin.ChatPrint(msg);
         }
         foreach (var a in plan.Actions) currentJobActions.Enqueue(a);
         TotalActions += plan.Actions.Count;

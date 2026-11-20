@@ -34,6 +34,7 @@ internal static class ChatHook
     {
         try
         {
+            if (message.TextValue.StartsWith("[Restocky]")) return;
             var item = message.Payloads.OfType<ItemPayload>().FirstOrDefault();
             if (item == null) return;
             onSale?.Invoke(item.ItemId, item.IsHQ, message.TextValue);

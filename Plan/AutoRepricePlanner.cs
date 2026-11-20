@@ -18,6 +18,9 @@ public static class AutoRepricePlanner
 
         /// <summary>History rows for listings that will NOT be changed (applied=false).</summary>
         public List<PriceHistoryRow> NotApplied { get; } = new();
+
+        /// <summary>Competitor listings ignored as bait, one notice per (item, hq).</summary>
+        public List<BaitNotice> Baits { get; } = new();
     }
 
     /// <param name="competitors">
@@ -50,6 +53,9 @@ public static class AutoRepricePlanner
                 prices.Sort();
                 d = RepriceRules.Decide(l.UnitPrice, prices, floorFor(l.ItemId), settings);
                 undercutters = MarketOfferFormat.Undercutters(offers, l.UnitPrice);
+                var dropped = BaitFinder.Dropped(offers, d.LowestCompetitor);
+                if (dropped.Count > 0 && !result.Baits.Exists(b => b.ItemId == l.ItemId && b.IsHq == l.IsHQ))
+                    result.Baits.Add(new BaitNotice(l.ItemId, l.IsHQ, retainerName, dropped, d.LowestCompetitor));
             }
 
             if (d.Apply)

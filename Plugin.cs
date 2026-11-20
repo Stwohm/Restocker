@@ -126,6 +126,20 @@ public sealed class Plugin : IDalamudPlugin
 
     public void ToggleMainUi() => MainWindow.Toggle();
 
+    /// <summary>Fork: every Restocky chat line goes through here, on the configured channel.</summary>
+    public static void ChatPrint(string message)
+    {
+        try
+        {
+            ChatGui.Print(new Dalamud.Game.Text.XivChatEntry
+            {
+                Type = (Dalamud.Game.Text.XivChatType)(Configuration?.ChatChannel ?? (int)Dalamud.Game.Text.XivChatType.RetainerSale),
+                Message = $"[Restocky] {message}",
+            });
+        }
+        catch (Exception ex) { Log.Warning(ex, "[Restocker] chat print failed"); }
+    }
+
     /// <summary>Executor 用: 自動 fetch 中に「期待アイテム」フィルタを設定。</summary>
     public void SetMarketWatcherExpected(uint itemId, bool isHq) => MarketWatcher.SetExpectedItem(itemId, isHq);
 

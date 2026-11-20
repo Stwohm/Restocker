@@ -313,5 +313,5 @@ public sealed class AutoCycleController : IDisposable
 
     private Vector3? PlayerPosition() => objectTable.LocalPlayer?.Position;
 
-    private void Print(string msg) => chat.Print($"[Restocky] {msg}");
+    private void Print(string msg) => Plugin.ChatPrint(msg);
 }

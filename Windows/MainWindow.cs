@@ -216,6 +216,26 @@ public sealed class MainWindow : Window, IDisposable
             configuration.Save();
         }
 
+        // Chat channel for Restocky messages (cycle summaries, bait notices, auto-cycle on/off).
+        var channels = new[]
+        {
+            (Dalamud.Game.Text.XivChatType.RetainerSale, "Retainer Sale Notifications"),
+            (Dalamud.Game.Text.XivChatType.Echo, "Echo"),
+            (Dalamud.Game.Text.XivChatType.SystemMessage, "System Messages"),
+            (Dalamud.Game.Text.XivChatType.Notice, "Notice"),
+            (Dalamud.Game.Text.XivChatType.Debug, "Debug"),
+        };
+        var labels = channels.Select(c => c.Item2).ToArray();
+        var current = Array.FindIndex(channels, c => (int)c.Item1 == configuration.ChatChannel);
+        if (current < 0) current = 0;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.Combo("Chat channel for Restocky messages", ref current, labels, labels.Length))
+        {
+            configuration.ChatChannel = (int)channels[current].Item1;
+            configuration.Save();
+            Plugin.ChatPrint("messages will appear in this channel.");
+        }
+
         ImGui.TextDisabled("Price history: pluginConfigs\\Restocky\\price-history.csv");
 
         ImGui.Spacing();

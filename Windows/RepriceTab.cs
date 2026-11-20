@@ -22,6 +22,7 @@ public sealed class RepriceTab
     private readonly ConfirmDialog confirmDialog;
     private readonly MarketCache marketCache;
     private readonly AutoCycleController autoCycle;
+    private readonly HashSet<string> reportedBaits = new();
     private string filter = string.Empty;
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
@@ -346,6 +347,13 @@ public sealed class RepriceTab
             }
             var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
             var current = listing.UnitPrice;
+            var dropped = BaitFinder.Dropped(marketCache.GetOffers(listing.ItemId, listing.IsHQ), lowest);
+            if (dropped.Count > 0)
+            {
+                var notice = new BaitNotice(listing.ItemId, listing.IsHQ, snap.RetainerName, dropped, lowest);
+                if (reportedBaits.Add(BaitFinder.Key(notice)))
+                    Plugin.ChatPrint(BaitFinder.Format(sheet.TryGetRow(listing.ItemId, out var br) ? br.Name.ExtractText() : $"#{listing.ItemId}", notice));
+            }
             if (lowest <= 0)
             {
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, no data)");
