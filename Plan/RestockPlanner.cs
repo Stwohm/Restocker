@@ -46,18 +46,27 @@ public static class RestockPlanner
         int perListing,
         long unitPrice,
         IReadOnlyList<RestockSource> sources,
-        IReadOnlyDictionary<string, int> freeSlotsByRetainer)
+        IReadOnlyDictionary<string, int> freeSlotsByRetainer,
+        IReadOnlyList<string>? preferredRetainers = null)
     {
+        var preferred = preferredRetainers ?? Array.Empty<string>();
         var result = new List<PlannedAction>();
         var need = targetUnits - listedUnits;
         if (need <= 0 || unitPrice <= 0) return result;
         perListing = Math.Max(1, perListing);
         var free = freeSlotsByRetainer.ToDictionary(p => p.Key, p => p.Value);
 
-        // Retainer inventories first (no extra hop), then character bag, then saddlebag.
-        var ordered = sources
-            .OrderBy(s => s.FixedTargetKey != null ? 0 : s.SourceKey.EndsWith(".saddle") ? 2 : 1)
-            .ToList();
+        // Preferred retainers (the ones that already sell this item) list first:
+        //   0 their own inventory, 1 bag -> them, 2 saddlebag -> them,
+        //   3 other retainers' own inventory, 4 bag, 5 saddlebag -> retainer with most free slots.
+        var preferredHasRoom = preferred.Any(p => free.TryGetValue(p, out var n) && n > 0);
+        int Rank(RestockSource s)
+        {
+            if (s.FixedTargetKey != null) return preferred.Contains(s.FixedTargetKey) ? 0 : 3;
+            var saddle = s.SourceKey.EndsWith(".saddle") ? 1 : 0;
+            return (preferredHasRoom ? 1 : 4) + saddle;
+        }
+        var ordered = sources.OrderBy(Rank).ToList();
 
         foreach (var src in ordered)
         {
@@ -65,6 +74,7 @@ public static class RestockPlanner
             while (need > 0 && avail > 0)
             {
                 var target = src.FixedTargetKey
+                    ?? preferred.FirstOrDefault(p => free.TryGetValue(p, out var n) && n > 0)
                     ?? free.Where(p => p.Value > 0).OrderByDescending(p => p.Value).Select(p => p.Key).FirstOrDefault();
                 if (target == null || !free.TryGetValue(target, out var slots) || slots <= 0) break;
 

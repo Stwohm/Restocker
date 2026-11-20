@@ -37,6 +37,30 @@ public class RestockPlannerTests
     }
 
     [Fact]
+    public void Bag_items_go_to_the_retainer_that_already_sells_the_item()
+    {
+        var sources = new[] { new RestockSource("char.1.bag", null, 5) };
+        var p = RestockPlanner.Plan(Twine, false, 2, 0, 1, 1, sources, Free(a: 3, b: 18), new[] { "A" });
+        Assert.All(p, a => Assert.Equal("A", a.RetainerKey));
+    }
+
+    [Fact]
+    public void Full_preferred_retainer_falls_back_to_most_free_slots()
+    {
+        var sources = new[] { new RestockSource("char.1.bag", null, 5) };
+        var p = RestockPlanner.Plan(Twine, false, 2, 0, 1, 1, sources, Free(a: 0, b: 18), new[] { "A" });
+        Assert.All(p, a => Assert.Equal("B", a.RetainerKey));
+    }
+
+    [Fact]
+    public void Preferred_retainer_bag_beats_other_retainer_bag()
+    {
+        var sources = new[] { new RestockSource("B", "B", 5), new RestockSource("A", "A", 5) };
+        var p = RestockPlanner.Plan(Twine, false, 1, 0, 1, 1, sources, Free(), new[] { "A" });
+        Assert.Equal("A", Assert.Single(p).SourceKey);
+    }
+
+    [Fact]
     public void Retainer_inventory_never_lists_on_another_retainer()
     {
         var sources = new[] { new RestockSource("A", "A", 10) };

@@ -173,11 +173,18 @@ public sealed class LowStockTab
 
             ImGui.TableNextColumn();
             var can = bellOpen && !executor.IsRunning && to > listed;
+            var userPrices = listed == 0; // nothing listed: the game's price window decides
             if (!can) ImGui.BeginDisabled();
-            if (ImGui.SmallButton($"Restock##rs-{id}")) Restock(e, to, restockPrice.TryGetValue(key, out var rp) ? rp : service.Price(e));
+            if (ImGui.SmallButton(userPrices ? $"List & price##rs-{id}" : $"Restock##rs-{id}"))
+            {
+                if (userPrices) RestockWithHandover(e, to);
+                else Restock(e, to, restockPrice.TryGetValue(key, out var rp) ? rp : service.Price(e));
+            }
             if (!can) ImGui.EndDisabled();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(bellOpen ? $"List up to {to} units now (retainer inventory, then bag, then saddlebag) at the price on this row" : "open the summoning bell first");
+                ImGui.SetTooltip(!bellOpen ? "open the summoning bell first"
+                    : userPrices ? $"Nothing listed: lists one, opens the game's price window and waits for you; the rest (up to {to}) follow at your price"
+                    : $"List up to {to} units now (retainer inventory, then bag, then saddlebag) at the price on this row");
 
             ImGui.TableNextColumn();
             if (ImGui.SmallButton($"x##rm-{id}")) remove = e;
@@ -189,6 +196,20 @@ public sealed class LowStockTab
             configuration.LowStock.Remove(remove);
             configuration.Save();
         }
+    }
+
+    private void RestockWithHandover(LowStockEntry e, int target)
+    {
+        var actions = service.PlanRestock(e, target, Executor.HandoverPlaceholderPrice);
+        if (actions.Count == 0)
+        {
+            var why = service.Sources(e.ItemId, e.IsHq).Count == 0 ? "none in retainer inventories / bag / saddlebag" : "no free market slot";
+            lastMessage = $"{ItemName(e.ItemId)}: nothing to list: {why}";
+            return;
+        }
+        lastMessage = $"{ItemName(e.ItemId)}: listing one, then the game's price window opens for you";
+        Plugin.ChatPrint(lastMessage);
+        executor.StartRestockWithHandover(actions);
     }
 
     private void Restock(LowStockEntry e, int target, long price)

@@ -87,7 +87,23 @@ public sealed class LowStockService : IDisposable
     {
         var free = MyRetainers().ToDictionary(s => s.Key, s => Math.Max(0, Planner.MaxListingSlots - s.Listings.Count));
         return RestockPlanner.Plan(e.ItemId, e.IsHq, targetUnits, ListedUnits(e.ItemId, e.IsHq),
-            PerListing(e), unitPrice, Sources(e.ItemId, e.IsHq), free);
+            PerListing(e), unitPrice, Sources(e.ItemId, e.IsHq), free, PreferredRetainers(e));
+    }
+
+    /// <summary>
+    /// Retainers that sell this item now (active listing), then the ones that sold it most recently.
+    /// Restock lists there first when they have a free slot.
+    /// </summary>
+    public List<string> PreferredRetainers(LowStockEntry e)
+    {
+        var keys = MyRetainers().Select(s => s.Key).ToHashSet();
+        return tracker.Records
+            .Where(r => r.ItemId == e.ItemId && r.IsHq == e.IsHq && keys.Contains(r.RetainerKey))
+            .OrderBy(r => r.Outcome == ListingTracker.Active ? 0 : 1)
+            .ThenByDescending(r => r.EndedUtc ?? r.LastSeenUtc)
+            .Select(r => r.RetainerKey)
+            .Distinct()
+            .ToList();
     }
 
     /// <summary>
