@@ -780,24 +780,12 @@ public sealed unsafe class Executor : IDisposable
     /// </summary>
     private static Dictionary<string, uint>? itemNameToIdCache;
     private static List<KeyValuePair<string, uint>>? itemNameByLengthDesc;
-    private const char HqGlyph = '';
 
     private static (uint itemId, bool isHq) ResolveItemFromDialogName(string raw)
     {
         if (string.IsNullOrEmpty(raw)) return (0, false);
-
-        // FFXIV の HQ アイコンは Unicode private-use の 
-        var isHq = raw.IndexOf(HqGlyph) >= 0;
-        // 表示は "<color>itemName</color>" 系の制御コードを含むことがあるので、
-        // 純粋なアイテム名候補だけを抽出する
-        var sb = new System.Text.StringBuilder(raw.Length);
-        foreach (var c in raw)
-        {
-            if (c < 0x20) continue;                    // 制御
-            if (c >= 0xE000 && c <= 0xF8FF) continue;  // PUA (HQ アイコンなど)
-            sb.Append(c);
-        }
-        var stripped = sb.ToString().Trim();
+        var isHq = DialogItemName.IsHq(raw);
+        var stripped = DialogItemName.Clean(raw);
 
         if (itemNameToIdCache == null)
         {
@@ -815,17 +803,24 @@ public sealed unsafe class Executor : IDisposable
             }
             catch { }
         }
-        if (itemNameToIdCache.TryGetValue(stripped, out var id)) return (id, isHq);
-        // 完全一致が無ければ長い name から順に部分一致 (短い name の偶然一致を避ける)
-        if (itemNameByLengthDesc != null)
+        return (DialogItemName.Match(stripped, itemNameToIdCache, itemNameByLengthDesc ?? new()), isHq);
+    }
+
+    /// <summary>
+    /// Fork: decode the node as a SeString so macro payloads (colour / glow) disappear instead of
+    /// leaking printable bytes like "H%I&...IH" into the name. Falls back to the raw text.
+    /// </summary>
+    private static string ReadNodeText(AtkTextNode* node)
+    {
+        if (node == null) return string.Empty;
+        try
         {
-            foreach (var kv in itemNameByLengthDesc)
-            {
-                if (kv.Key.Length < 3) break;
-                if (stripped.Contains(kv.Key)) return (kv.Value, isHq);
-            }
+            return Dalamud.Game.Text.SeStringHandling.SeString.Parse(node->NodeText.AsSpan()).TextValue;
         }
-        return (0, isHq);
+        catch
+        {
+            return node->NodeText.ToString() ?? string.Empty;
+        }
     }
 
     private void ClickListingSlot(int slot)
@@ -1214,7 +1209,7 @@ public sealed unsafe class Executor : IDisposable
         // dialog のアイテム名から item id を逆引き。snapshot の slot index は画面 row と
         // 一致しないため、行を click した結果開いた dialog の表示アイテムを真として扱う。
         var sell = (AddonRetainerSell*)addon;
-        var dialogName = sell->ItemName != null ? sell->ItemName->NodeText.ToString() ?? string.Empty : string.Empty;
+        var dialogName = ReadNodeText(sell->ItemName);
         var (resolvedItemId, resolvedIsHq) = ResolveItemFromDialogName(dialogName);
 
         // Fork (yagi2/Restocker#1): skip paths only close the dialog. The single row advance

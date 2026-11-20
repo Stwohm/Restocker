@@ -90,7 +90,9 @@ public sealed class AutoCycleController : IDisposable
         anchor = pos.Value;
         Enabled = true;
         ConsecutiveFailures = 0;
-        NextRunUtc = DateTime.UtcNow;
+        // Countdown starts from the full interval (no jitter on the first wait), so turning it on
+        // at 30 shows 30:00. "Full cycle (once)" is the way to run immediately.
+        NextRunUtc = DateTime.UtcNow + Interval();
         Print($"auto cycle ON, every {Interval().TotalMinutes:0} min (+/- {Math.Max(0, configuration.AutoCycleJitterSeconds)} s).");
         if (isAutoRetainerLoaded())
             Print("warning: AutoRetainer is loaded. If it drives the bell at the same time the two will collide.");
@@ -105,6 +107,13 @@ public sealed class AutoCycleController : IDisposable
         if (cycleRunning && cycleIsAuto && executor.IsRunning) executor.Cancel();
         Print($"auto cycle OFF: {reason}");
         log.Information($"[Restocker] auto cycle disabled: {reason}");
+    }
+
+    /// <summary>Interval changed in the UI: count down the new interval from now.</summary>
+    public void RestartCountdown()
+    {
+        if (!Enabled || cycleRunning) return;
+        NextRunUtc = DateTime.UtcNow + Interval();
     }
 
     private void Start(bool auto)

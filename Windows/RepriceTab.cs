@@ -93,12 +93,30 @@ public sealed class RepriceTab
         ImGui.SameLine();
         var enabled = autoCycle.Enabled;
         if (!enabled && !bellOpen) ImGui.BeginDisabled();
-        if (ImGui.Checkbox($"Auto cycle every {configuration.AutoCycleIntervalMinutes} min##restocky-auto", ref enabled))
+        if (ImGui.Checkbox("Auto cycle every##restocky-auto", ref enabled))
         {
             if (enabled) autoCycle.Enable();
             else autoCycle.Disable("turned off");
         }
         if (!autoCycle.Enabled && !bellOpen) ImGui.EndDisabled();
+
+        // Editable interval (minutes). Changing it while the loop is on restarts the countdown.
+        ImGui.SameLine(0, 4);
+        ImGui.SetNextItemWidth(50);
+        var minutes = configuration.AutoCycleIntervalMinutes;
+        if (ImGui.InputInt("##restocky-interval", ref minutes, 0, 0, default, ImGuiInputTextFlags.EnterReturnsTrue)
+            || ImGui.IsItemDeactivatedAfterEdit())
+        {
+            minutes = System.Math.Clamp(minutes, 1, 1440);
+            if (minutes != configuration.AutoCycleIntervalMinutes)
+            {
+                configuration.AutoCycleIntervalMinutes = minutes;
+                configuration.Save();
+                autoCycle.RestartCountdown();
+            }
+        }
+        ImGui.SameLine(0, 4);
+        ImGui.TextUnformatted("min");
 
         if (autoCycle.Enabled)
         {
@@ -109,7 +127,7 @@ public sealed class RepriceTab
             {
                 var left = next - System.DateTime.UtcNow;
                 if (left < System.TimeSpan.Zero) left = System.TimeSpan.Zero;
-                ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.9f, 0.5f, 1f), $"next in {(int)left.TotalMinutes}:{left.Seconds:00}");
+                ImGui.TextColored(new System.Numerics.Vector4(0.5f, 0.9f, 0.5f, 1f), $"next in {(int)left.TotalMinutes:00}:{left.Seconds:00}");
             }
             if (autoCycle.ConsecutiveFailures > 0)
             {
