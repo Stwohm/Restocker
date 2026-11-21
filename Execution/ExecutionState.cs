@@ -100,4 +100,7 @@ public enum ExecutionState
 
     Done,
     Stopped,
+
+    /// <summary>Fork: wait for the fetch ContextMenu to close before retrying or advancing the row.</summary>
+    FetchAwaitingContextMenuClose,
 }

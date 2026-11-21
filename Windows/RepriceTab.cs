@@ -332,6 +332,8 @@ public sealed class RepriceTab
         // Fork: the fetch reopened the sell list, so RetainerWatcher stored a NEW snapshot
         // object. The one captured at click time is stale; always use the current one.
         var snap = configuration.Snapshots.TryGetValue(capturedSnap.Key, out var fresh) ? fresh : capturedSnap;
+        // Fork: a skipped fetch row can still have a cached price from a previous visit.
+        var since = executor.JobFetchStartUtc;
         var seen = new HashSet<(uint, bool)>();
         var missing = new HashSet<(uint, bool, string)>();
         var applied = 0;
@@ -352,10 +354,10 @@ public sealed class RepriceTab
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' HELD (left at {listing.UnitPrice:N0})");
                 continue;
             }
-            if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
+            if (!marketCache.HasDataSince(listing.ItemId, listing.IsHQ, since))
             {
                 missing.Add((listing.ItemId, listing.IsHQ, name));
-                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' MISS (no cache)");
+                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' MISS (no fresh cache)");
                 continue;
             }
             var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);

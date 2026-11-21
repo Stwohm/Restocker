@@ -131,6 +131,8 @@ public class RepriceRulesTests
         Assert.Equal(2, r.NotApplied.Count);
         Assert.Equal(RepriceReason.NoCompetitor, r.NotApplied[0].Reason);
         Assert.Equal(RepriceReason.Error, r.NotApplied[1].Reason);
+        Assert.False(r.NotApplied[1].Applied);
+        Assert.Equal(r.NotApplied[1].OldPrice, r.NotApplied[1].NewPrice);
     }
 
     [Fact]

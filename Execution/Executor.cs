@@ -76,6 +76,7 @@ public sealed unsafe class Executor : IDisposable
 
     /// <summary>Non-null while the current job is walking sell-list rows for market prices.</summary>
     private FetchRowQueue? fetchRows;
+    private readonly ContextMenuRetryPolicy fetchContextMenuRetry = new();
 
     /// <summary>Set on entering a FetchPrices job; rows are built from the LIVE market
     /// container on the first PerformingAction tick (after the snapshot wait).</summary>
@@ -89,7 +90,7 @@ public sealed unsafe class Executor : IDisposable
     private DateTime fetchClickedAtUtc;
 
     /// <summary>Start of the current job's fetch phase; the planner only trusts data newer than this.</summary>
-    private DateTime jobFetchStartUtc;
+    internal DateTime JobFetchStartUtc { get; private set; }
 
     /// <summary>Bait notices already shown this session (key = BaitFinder.Key).</summary>
     private readonly HashSet<string> reportedBaits = new();
@@ -407,6 +408,7 @@ public sealed unsafe class Executor : IDisposable
         usedMarketSlots.Clear();
         fetchRows = null;
         fetchRowsPending = false;
+        fetchContextMenuRetry.Reset();
         RepricesApplied = 0;
         AppliedReprices.Clear();
         RepricesSkipped = 0;
@@ -470,6 +472,7 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.AwaitingSellListAfterReading: TickAwaitingSellListAfterReading(); break;
                 case ExecutionState.AwaitingContextMenu: TickAwaitingContextMenu(); break;
                 case ExecutionState.ClickingPutUpForSale: TickClickingPutUpForSale(); break;
+                case ExecutionState.FetchAwaitingContextMenuClose: TickFetchAwaitingContextMenuClose(); break;
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
                 case ExecutionState.AwaitingSaddleMove: TickAwaitingSaddleMove(); break;
@@ -503,6 +506,7 @@ public sealed unsafe class Executor : IDisposable
         handover = null;
         fetchRows = null;
         fetchRowsPending = false;
+        fetchContextMenuRetry.Reset();
         Plugin.Instance?.ClearMarketWatcherExpected();
         State = ExecutionState.Stopped;
         StatusMessage = reason;
@@ -846,7 +850,7 @@ public sealed unsafe class Executor : IDisposable
         var unique = new HashSet<(uint, bool)>();
         foreach (var l in live) unique.Add((l.ItemId, l.IsHQ));
         fetchRows = new FetchRowQueue(live.Count, unique.Count);
-        jobFetchStartUtc = DateTime.UtcNow;
+        JobFetchStartUtc = DateTime.UtcNow;
         TotalActions += live.Count;
         log.Information($"[Restocker] fetch phase: {jobs[jobCursor].RetainerName} rows={live.Count} unique={unique.Count}");
     }
@@ -868,7 +872,7 @@ public sealed unsafe class Executor : IDisposable
 
         var live = ReadLiveListings();
         var key = ActiveRetainerKey();
-        var since = jobFetchStartUtc;
+        var since = JobFetchStartUtc;
         var plan = AutoRepricePlanner.Plan(
             key,
             job.RetainerName,
@@ -954,10 +958,7 @@ public sealed unsafe class Executor : IDisposable
                 // Expected item 0 = ignore every OfferingsReceived until the dialog tells us
                 // which item this row really is.
                 Plugin.Instance?.SetMarketWatcherExpected(0, false);
-                ClickListingSlot(fetchRows.CurrentRow);
-                State = ExecutionState.AwaitingContextMenu;
-                waitingSince = null;
-                Throttle();
+                ClickFetchListingSlot(fetchRows.CurrentRow);
                 return;
             }
         }
@@ -1153,15 +1154,17 @@ public sealed unsafe class Executor : IDisposable
             if (waitingSince == null) waitingSince = DateTime.UtcNow;
             else if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(3))
             {
+                // Fork: a retry that fails to reopen the menu still spends a retry for this row.
+                if (fetchRows != null && fetchContextMenuRetry.RetryCount > 0)
+                {
+                    HandleMissingAdjustPriceEntry(fetchRows.CurrentRow, "menu did not open");
+                    return;
+                }
+
                 // 1 件詰まっても残り全部を巻き込みたくないので、stop ではなく skip。
                 log.Warning("[Restocker] ContextMenu did not open, skipping this action");
-                if (fetchRows != null) fetchRows.SkipCurrentRow();
-                else if (currentJobActions.Count > 0) currentJobActions.Dequeue();
-                CompletedActions++;
-                Plugin.Instance?.ClearMarketWatcherExpected();
-                waitingSince = null;
-                State = ExecutionState.PerformingAction;
-                Throttle();
+                fetchContextMenuRetry.Reset();
+                SkipContextMenuAction();
             }
             return;
         }
@@ -1186,6 +1189,7 @@ public sealed unsafe class Executor : IDisposable
 
         if (ContextMenuHelper.ClickEntry(predicate))
         {
+            if (nextKind == PlannedActionKind.FetchMarketPrice) fetchContextMenuRetry.Reset();
             waitingSince = null;
             State = nextKind switch
             {
@@ -1197,11 +1201,73 @@ public sealed unsafe class Executor : IDisposable
         }
         if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(3))
         {
-            var entries = ContextMenuHelper.EnumerateEntries();
-            log.Warning($"[Restocker] {label} entry not found in ContextMenu. Entries: {string.Join(" | ", entries)}");
+            var entries = string.Join(" | ", ContextMenuHelper.EnumerateEntries());
+            if (nextKind == PlannedActionKind.FetchMarketPrice && fetchRows != null)
+            {
+                HandleMissingAdjustPriceEntry(fetchRows.CurrentRow, entries.Length == 0 ? "empty" : entries);
+                return;
+            }
+
+            log.Warning($"[Restocker] {label} entry not found in ContextMenu. Entries: {entries}");
             ContextMenuHelper.Close();
             Stop($"{label} entry not found in ContextMenu (see /xllog)");
         }
+    }
+
+    // Fork: first clicks and retries use the same listing callback and throttle.
+    private void ClickFetchListingSlot(int slot)
+    {
+        State = ExecutionState.AwaitingContextMenu;
+        waitingSince = null;
+        ClickListingSlot(slot);
+        Throttle();
+    }
+
+    private void HandleMissingAdjustPriceEntry(int slot, string entries)
+    {
+        var decision = fetchContextMenuRetry.OnEntryMissing();
+        if (decision == ContextMenuRetryDecision.Retry)
+            log.Warning($"[Restocker] adjust-price entry not found (entries: {entries}), retry {fetchContextMenuRetry.RetryCount}/{ContextMenuRetryPolicy.MaxRetries} for slot {slot}");
+        else
+            log.Warning($"[Restocker] adjust-price entry not found (entries: {entries}), skipping slot {slot}");
+
+        ContextMenuHelper.Close();
+        if (decision == ContextMenuRetryDecision.Stop)
+        {
+            SkipContextMenuAction();
+            Stop("adjust-price entry not found in ContextMenu (see /xllog)");
+            return;
+        }
+
+        State = ExecutionState.FetchAwaitingContextMenuClose;
+        Throttle();
+    }
+
+    private void TickFetchAwaitingContextMenuClose()
+    {
+        if (AddonHelper.IsOpen("ContextMenu"))
+        {
+            ContextMenuHelper.Close();
+            Throttle();
+            return;
+        }
+
+        // Fork: exhausting retries resets the row's retry count and leaves it queued until the menu closes.
+        if (fetchContextMenuRetry.RetryCount > 0)
+            ClickFetchListingSlot(fetchRows!.CurrentRow);
+        else
+            SkipContextMenuAction();
+    }
+
+    private void SkipContextMenuAction()
+    {
+        if (fetchRows != null) fetchRows.SkipCurrentRow();
+        else if (currentJobActions.Count > 0) currentJobActions.Dequeue();
+        CompletedActions++;
+        Plugin.Instance?.ClearMarketWatcherExpected();
+        waitingSince = null;
+        State = ExecutionState.PerformingAction;
+        Throttle();
     }
 
     /// <summary>
