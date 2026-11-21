@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Restocker.Common;
 using Restocker.Execution;
@@ -135,10 +134,10 @@ public sealed class LowStockTab
             ImGui.TableNextColumn();
             var key = (e.ItemId, e.IsHq);
             if (!restockPrice.TryGetValue(key, out var chosen)) chosen = service.Price(e);
-            var price = chosen;
+            // Fork: InputScalar with null step refs crashes in Dalamud's binding; game prices fit in int.
+            var price = (int)Math.Clamp(chosen, 0, int.MaxValue);
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputScalar($"##price-{id}", ImGuiDataType.S64, ref price,
-                in Unsafe.NullRef<long>(), in Unsafe.NullRef<long>(), "%lld", ImGuiInputTextFlags.None))
+            if (ImGui.InputInt($"##price-{id}", ref price, 0))
                 restockPrice[key] = Math.Max(0, price);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Price for the new listings. The default uses your current listing or market price and respects the floor.");
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
@@ -749,10 +748,11 @@ public sealed class RepriceTab
         var warning = RepriceRules.LimitExceeded(current, v, configuration.MaxDropPercent, configuration.MaxRaisePercent);
         if (warning.HasValue) ImGui.PushStyleColor(ImGuiCol.Text, WarningColor(warning.Value));
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputScalar($"##price-{key}", ImGuiDataType.S64, ref v,
-            in Unsafe.NullRef<long>(), in Unsafe.NullRef<long>(), "%lld", ImGuiInputTextFlags.None))
+        // Fork: InputScalar with null step refs crashes in Dalamud's binding; game prices fit in int.
+        var iv = (int)Math.Clamp(v, 0, int.MaxValue);
+        if (ImGui.InputInt($"##price-{key}", ref iv, 0))
         {
-            v = Math.Max(0, v);
+            v = Math.Max(0, iv);
             editedPrice[key] = (v, false);
         }
         if (warning.HasValue) ImGui.PopStyleColor();
