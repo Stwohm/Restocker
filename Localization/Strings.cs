@@ -197,6 +197,16 @@ public static class Strings
     public static string UndercuttersSeller => T("Seller", "出品者", "Verkäufer", "Vendeur", "卖家", "판매자");
     public static string UndercuttersQuantity => T("Qty", "個数", "Anz.", "Qté", "数量", "수량");
     public static string UndercuttersUnitPrice => T("Unit price", "単価", "Stückpreis", "Prix unitaire", "单价", "개당 가격");
+    public static string UndercuttersLast24h => T("24h", "24時間", "24 Std.", "24 h", "24小时", "24시간");
+    public static string UndercuttersLast3d => T("3d", "3日", "3 T.", "3 j", "3天", "3일");
+    public static string UndercuttersLast7d => T("1w", "1週間", "1 Wo.", "1 sem.", "1周", "1주");
+    public static string UndercuttersMostActiveRivals => T("Most active rivals (1 week)", "自分より安い出品が多かった出品者（1週間）",
+        "Aktivste Konkurrenten (1 Woche)", "Concurrents les plus actifs (1 semaine)", "最活跃的竞争对手（1周）", "가장 활발한 경쟁 판매자 (1주)");
+    public static string UndercuttersCountHelp => T("Counts show scans where each seller was below your lowest known listing price.",
+        "回数は、各出品者の価格が自分の確認済み最安値を下回っていた調査の回数です。",
+        "Gezählt werden Abfragen, bei denen der Verkäufer deinen niedrigsten bekannten Angebotspreis unterboten hat.",
+        "Nombre de relevés où le vendeur proposait un prix inférieur à votre prix de vente le plus bas connu.",
+        "次数表示各卖家的价格低于你已知最低挂单价的扫描次数。", "각 판매자의 가격이 확인된 내 최저 판매가보다 낮았던 조회 횟수입니다.");
     public static string UndercuttersMore => T("+{0:N0} more", "ほか{0:N0}件", "+{0:N0} weitere", "+{0:N0} de plus", "另有 {0:N0} 个挂单", "외 {0:N0}건");
     public static string UndercuttersScannedNow => T("scanned just now", "たった今取得", "gerade abgefragt", "relevé à l’instant", "刚刚扫描", "방금 조회함");
     public static string UndercuttersScannedMinutes => T("scanned {0:N0} min ago", "{0:N0}分前に取得", "vor {0:N0} Min. abgefragt", "relevé il y a {0:N0} min", "{0:N0} 分钟前扫描", "{0:N0}분 전 조회함");
