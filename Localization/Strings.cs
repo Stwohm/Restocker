@@ -1,3 +1,5 @@
+using Restocker.Market;
+
 namespace Restocker.Localization;
 
 public enum Language
@@ -36,6 +38,19 @@ public static class Strings
     public static string LanguageNameFrench => "Français";
     public static string LanguageNameChinese => "简体中文";
     public static string LanguageNameKorean => "한국어";
+
+    // Fork: manual prefill and Apply show the same warning for the proposed change.
+    public static string MaxRaiseSetting => T("Max raise % per change (0 = off)", "1回の値上げ上限 %（0で無効）", "Max. Erhöhung pro Änderung in % (0 = aus)", "Hausse maximale par changement en % (0 = désactivé)", "每次涨价上限 %（0 = 关闭）", "1회 가격 인상 한도 % (0 = 끄기)");
+    public static string AutoPriceTooltip => T("Fetch live prices for every retainer and apply the undercut and floor. Changes above either percentage limit are skipped automatically.", "全リテイナーの相場を取得し、値下げ幅と最低価格を適用します。変動率の上限を超えた変更はスキップします。", "Marktpreise für alle Gehilfen abrufen und Unterbietung sowie Mindestpreis anwenden. Änderungen über den Prozentgrenzen werden übersprungen.", "Actualise les prix de tous les servants et applique la sous-cotation et le prix plancher. Les changements dépassant les limites sont ignorés.", "获取所有雇员的实时价格，应用压价和底价。自动跳过超过涨跌幅上限的变更。", "모든 집사의 시세를 확인하고 가격 인하 폭과 최저가를 적용합니다. 변동률 한도를 넘는 변경은 건너뜁니다.");
+    public static string ManualPriceTooltip => T("Prefill New for every retainer using the automatic pricing rules. Review marked changes, edit prices, then add to the plan and apply.", "自動価格設定ルールで全リテイナーの新価格を入力します。警告のある変更を確認し、価格を編集してからプランに追加して適用してください。", "Neue Preise für alle Gehilfen nach den automatischen Preisregeln eintragen. Markierte Änderungen prüfen, Preise bearbeiten, zum Plan hinzufügen und anwenden.", "Préremplit les nouveaux prix de tous les servants selon les règles automatiques. Vérifiez les changements signalés, ajustez les prix, ajoutez-les au plan puis appliquez-le.", "按自动定价规则填入所有雇员的新价格。检查标记的变更，编辑价格，然后加入计划并应用。", "자동 가격 규칙으로 모든 집사의 새 가격을 채웁니다. 표시된 변경을 확인하고 가격을 수정한 뒤 계획에 추가하고 적용하세요.");
+    public static string SkippedPrice => T("Skipped ({0})", "スキップ（{0}）", "Übersprungen ({0})", "Ignoré ({0})", "已跳过（{0}）", "건너뜀 ({0})");
+    public static string PriceWarning(RepriceReason reason, long oldPrice, long newPrice)
+    {
+        var format = reason == RepriceReason.MaxRaise
+            ? T("Raise of {0:0.##}% ({1:N0} → {2:N0}) exceeds the max raise limit. Check before applying.", "{0:0.##}% の値上げ（{1:N0} → {2:N0}）は上限を超えています。適用前に確認してください。", "Erhöhung um {0:0.##}% ({1:N0} → {2:N0}) überschreitet das Limit. Vor dem Anwenden prüfen.", "La hausse de {0:0.##} % ({1:N0} → {2:N0}) dépasse la limite. Vérifiez avant d’appliquer.", "涨幅 {0:0.##}%（{1:N0} → {2:N0}）超过上限。请在应用前确认。", "{0:0.##}% 인상({1:N0} → {2:N0})이 한도를 초과합니다. 적용 전에 확인하세요.")
+            : T("Drop of {0:0.##}% ({1:N0} → {2:N0}) exceeds the max drop limit. Check before applying.", "{0:0.##}% の値下げ（{1:N0} → {2:N0}）は上限を超えています。適用前に確認してください。", "Senkung um {0:0.##}% ({1:N0} → {2:N0}) überschreitet das Limit. Vor dem Anwenden prüfen.", "La baisse de {0:0.##} % ({1:N0} → {2:N0}) dépasse la limite. Vérifiez avant d’appliquer.", "跌幅 {0:0.##}%（{1:N0} → {2:N0}）超过上限。请在应用前确认。", "{0:0.##}% 인하({1:N0} → {2:N0})가 한도를 초과합니다. 적용 전에 확인하세요.");
+        return string.Format(format, System.Math.Abs(RepriceRules.ChangePercent(oldPrice, newPrice)), oldPrice, newPrice);
+    }
 
     // Fork: sale history capture and display.
     public static string FetchSaleHistory => T("Read sale history when visiting retainers", "リテイナー巡回時に販売履歴を取得", "Verkaufsverlauf bei Gehilfenbesuchen abrufen", "Lire l’historique des ventes lors des visites aux servants", "访问雇员时读取出售记录", "집사 방문 시 판매 내역 조회");

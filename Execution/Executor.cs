@@ -102,6 +102,8 @@ public sealed unsafe class Executor : IDisposable
     public int RepricesApplied { get; private set; }
     public int RepricesSkipped { get; private set; }
     public int ListingsHeld { get; private set; }
+    // Fork: retain guarded proposals until the end-of-cycle chat summary.
+    private readonly List<PriceHistoryRow> guardedReprices = new();
 
     /// <summary>Fork: every price actually written in this run, for the chat summary.</summary>
     public List<(string Retainer, uint ItemId, bool IsHq, long OldPrice, long NewPrice)> AppliedReprices { get; } = new();
@@ -412,6 +414,7 @@ public sealed unsafe class Executor : IDisposable
         RepricesApplied = 0;
         AppliedReprices.Clear();
         RepricesSkipped = 0;
+        guardedReprices.Clear();
         ListingsHeld = 0;
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
@@ -792,6 +795,13 @@ public sealed unsafe class Executor : IDisposable
             var arrow = r.NewPrice < r.OldPrice ? "↓" : "↑";
             Plugin.ChatPrint($"  {name}{(r.IsHq ? " (HQ)" : "")} [{r.Retainer}]: {r.OldPrice:N0} → {r.NewPrice:N0} {arrow}");
         }
+        foreach (var r in guardedReprices)
+        {
+            var name = sheet.TryGetRow(r.ItemId, out var row) ? row.Name.ExtractText() : $"#{r.ItemId}";
+            var skipped = string.Format(Localization.Strings.SkippedPrice, RepriceRules.ReasonCode(r.Reason));
+            var percent = RepriceRules.ChangePercent(r.OldPrice, r.NewPrice);
+            Plugin.ChatPrint($"  {name}{(r.Hq ? " (HQ)" : "")} [{r.Retainer} #{r.Slot}] {skipped}: {r.OldPrice:N0} → {r.NewPrice:N0} ({percent:+0.##;-0.##;0}%)");
+        }
     }
 
     private void ObserveListingsNow()
@@ -891,7 +901,9 @@ public sealed unsafe class Executor : IDisposable
         {
             RepricesSkipped++;
             History?.Append(row);
-            if (row.Reason is RepriceReason.MaxDrop or RepriceReason.Error)
+            if (row.Reason is RepriceReason.MaxDrop or RepriceReason.MaxRaise)
+                guardedReprices.Add(row);
+            if (row.Reason is RepriceReason.MaxDrop or RepriceReason.MaxRaise or RepriceReason.Error)
                 log.Warning($"[Restocker] not applied ({RepriceRules.ReasonCode(row.Reason)}): {job.RetainerName} slot={row.Slot} item={row.ItemId} hq={row.Hq} old={row.OldPrice:N0} lowest={row.LowestCompetitor:N0} target={row.NewPrice:N0}");
         }
         foreach (var b in plan.Baits)

@@ -46,6 +46,7 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Do not apply a new price that is more than this % below the current one. 0 = off.</summary>
     public double MaxDropPercent { get; set; } = 30;
+    public double MaxRaisePercent { get; set; } = 30;
 
     /// <summary>Per-item minimum price (key = item id, HQ and NQ share it). Missing / 0 = no floor.</summary>
     public Dictionary<uint, long> PriceFloors { get; set; } = new();
@@ -90,10 +91,11 @@ public sealed class Configuration : IPluginConfiguration
 
     private static string HeldKey(uint itemId, bool hq) => $"{itemId}:{(hq ? 1 : 0)}";
 
-    public Restocker.Market.RepriceSettings ToRepriceSettings() => new()
+    public Restocker.Market.RepriceSettings ToRepriceSettings(int? undercutGil = null) => new()
     {
-        UndercutGil = UndercutGil,
+        UndercutGil = undercutGil ?? UndercutGil,
         MaxDropPercent = MaxDropPercent,
+        MaxRaisePercent = MaxRaisePercent,
     };
 
     public Language ResolveLanguage(Dalamud.Game.ClientLanguage clientLanguage)

@@ -21,11 +21,83 @@ public class RepriceRulesTests
     }
 
     [Fact]
-    public void Raises_when_we_are_far_below_the_market()
+    public void Zero_raise_limit_allows_large_increases()
     {
-        var d = RepriceRules.Decide(50_000, new long[] { 75_000 }, 0, Default);
+        var d = RepriceRules.Decide(50_000, new long[] { 75_000 }, 0, new RepriceSettings { MaxRaisePercent = 0 });
         Assert.True(d.Apply);
         Assert.Equal(74_999, d.NewPrice);
+    }
+
+    [Fact]
+    public void Low_group_is_evaluated_for_each_listing_on_the_same_board()
+    {
+        var offers = new[]
+        {
+            new MarketOffer(15_000, "A", 1), new MarketOffer(15_000, "A", 1),
+            new MarketOffer(99_998, "B", 1), new MarketOffer(99_999, "C", 1),
+            new MarketOffer(100_000, "D", 1), new MarketOffer(100_000, "E", 1),
+        };
+        var listings = new[] { new LiveListing(0, 1, false, 1, 14_999), new LiveListing(1, 1, false, 1, 100_000) };
+        var nearby = AutoRepricePlanner.Plan("k", "R", listings[..1], (_, _) => offers, _ => 0, Default, DateTime.UtcNow);
+        Assert.Empty(nearby.Baits);
+        Assert.Empty(nearby.Actions);
+        var unchanged = Assert.Single(nearby.NotApplied);
+        Assert.Equal(15_000, unchanged.LowestCompetitor);
+        Assert.Equal(14_999, unchanged.NewPrice);
+        Assert.Equal(RepriceReason.NoChange, unchanged.Reason);
+
+        var both = AutoRepricePlanner.Plan("k", "R", listings, (_, _) => offers, _ => 0, Default, DateTime.UtcNow);
+        var action = Assert.Single(both.Actions);
+        Assert.Equal(RepriceReason.Outlier, action.Reason);
+        Assert.Equal(99_997, action.UnitPrice);
+        var notice = Assert.Single(both.Baits);
+        Assert.Equal(99_998, notice.RealLowest);
+        Assert.Equal(2, notice.Baits.Count);
+    }
+
+    [Theory]
+    [InlineData(13_000, true, RepriceReason.Undercut)]
+    [InlineData(13_001, false, RepriceReason.MaxRaise)]
+    [InlineData(6_999, false, RepriceReason.MaxDrop)]
+    public void Prefill_preserves_target_and_marks_changes_beyond_the_limit(long target, bool apply, RepriceReason reason)
+    {
+        var d = RepriceRules.Decide(10_000, new[] { target + 1 }, 0, Default);
+        Assert.Equal(target, d.NewPrice);
+        Assert.Equal(apply, d.Apply);
+        Assert.Equal(reason, d.Reason);
+        Assert.Equal(!apply, d.MarkForReview);
+    }
+
+    [Fact]
+    public void Single_high_offer_records_skipped_raise_and_proposed_price()
+    {
+        var plan = AutoRepricePlanner.Plan("k", "R", new[] { new LiveListing(0, 1, false, 1, 449_999) },
+            (_, _) => new[] { new MarketOffer(799_999, "A", 1) }, _ => 0, Default, DateTime.UtcNow);
+        Assert.Empty(plan.Actions);
+        var row = Assert.Single(plan.NotApplied);
+        Assert.False(row.Applied);
+        Assert.Equal(799_998, row.NewPrice);
+        Assert.Equal(RepriceReason.MaxRaise, row.Reason);
+        Assert.EndsWith(",449999,799999,799998,false,max_raise,", PriceHistoryLog.Format(row));
+    }
+
+    [Fact]
+    public void Floor_driven_raise_is_marked_for_review()
+    {
+        var d = RepriceRules.Decide(100, new long[] { 95 }, 135, Default);
+        Assert.False(d.Apply);
+        Assert.True(d.MarkForReview);
+        Assert.Equal(135, d.NewPrice);
+        Assert.Equal(RepriceReason.MaxRaise, d.Reason);
+    }
+
+    [Theory]
+    [InlineData(22_500, 14_900)]
+    [InlineData(22_501, 99_998)]
+    [InlineData(0, 99_998)]
+    public void Low_group_exception_uses_group_max_and_inclusive_ratio(long current, long lowest)
+    {
+        Assert.Equal(lowest, LowestPriceResolver.Pick(new long[] { 14_900, 15_000, 99_998 }, ourPrice: current));
     }
 
     [Fact]
@@ -139,7 +211,7 @@ public class RepriceRulesTests
     public void Auto_planner_held_listing_has_no_action_and_writes_held_history()
     {
         var listings = new List<LiveListing> { new(3, 100, true, 1, 99_999) };
-        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(120_000, "Rival", 1) };
+        IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(200_000, "Rival", 1) };
 
         var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default,
             new System.DateTime(2026, 11, 20), (item, hq) => item == 100 && hq);

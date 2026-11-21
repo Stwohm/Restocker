@@ -97,7 +97,7 @@ public sealed class RepriceTab
             autoCycle.RunOnce();
         if (!canRun) ImGui.EndDisabled();
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Every retainer: fetch live prices, lowest competitor -undercut, apply with the floor / max-drop guards. No confirm dialog.");
+            ImGui.SetTooltip(Strings.AutoPriceTooltip);
 
         ImGui.SameLine();
         if (!canRun) ImGui.BeginDisabled();
@@ -109,13 +109,13 @@ public sealed class RepriceTab
             {
                 if (!configuration.Snapshots.TryGetValue(key, out var s)) return;
                 expandedSections.Add("reprice-" + key);
-                ApplyMatchLowestForRetainer(s, offset: -undercut, respectHold: true);
+                ApplyMatchLowestForRetainer(s, undercut, respectHold: true);
             };
             executor.StartFetchAll();
         }
         if (!canRun) ImGui.EndDisabled();
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Every retainer: fetch live prices and pre-fill the New column with lowest -undercut. Nothing is applied: edit prices, '+ Add all to plan', then Apply.");
+            ImGui.SetTooltip(Strings.ManualPriceTooltip);
 
         ImGui.SameLine();
         var enabled = autoCycle.Enabled;
@@ -256,9 +256,9 @@ public sealed class RepriceTab
             if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
             {
                 var capturedSnap = snap;
-                var capturedOffset = -undercutDelta;
+                var capturedUndercut = undercutDelta;
                 executor.OnFetchJobCompleted = null;
-                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: capturedOffset);
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, capturedUndercut);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
             if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
@@ -267,7 +267,7 @@ public sealed class RepriceTab
             {
                 var capturedSnap = snap;
                 executor.OnFetchJobCompleted = null;
-                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: 0);
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, 0);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
             if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
@@ -327,7 +327,7 @@ public sealed class RepriceTab
         => $"{snapKey}#{l.ListingIndex}#{l.ItemId}{(l.IsHQ ? "h" : "n")}";
 
     /// <summary>fetch 完了後に editedPrice に「最安値 + offset」を入れる。プランには勝手に積まない。</summary>
-    private void ApplyMatchLowestForRetainer(RetainerSnapshot capturedSnap, long offset = -1, bool respectHold = false)
+    private void ApplyMatchLowestForRetainer(RetainerSnapshot capturedSnap, int undercut, bool respectHold = false)
     {
         // Fork: the fetch reopened the sell list, so RetainerWatcher stored a NEW snapshot
         // object. The one captured at click time is stale; always use the current one.
@@ -339,7 +339,8 @@ public sealed class RepriceTab
         var applied = 0;
         var sheet = Plugin.DataManager.GetExcelSheet<Item>();
 
-        Plugin.Log.Information($"[Restocker] reprice apply: retainer={snap.RetainerName} listings={snap.Listings.Count} offset={offset}");
+        var settings = configuration.ToRepriceSettings(undercut);
+        Plugin.Log.Information($"[Restocker] reprice apply: retainer={snap.RetainerName} listings={snap.Listings.Count} undercut={undercut}");
 
         foreach (var listing in snap.Listings)
         {
@@ -356,12 +357,16 @@ public sealed class RepriceTab
             }
             if (!marketCache.HasDataSince(listing.ItemId, listing.IsHQ, since))
             {
+                // Fork: a new full-cycle prefill must not leave a stale proposal available to Add all.
+                if (respectHold) editedPrice.Remove(EditKey(snap.Key, listing));
                 missing.Add((listing.ItemId, listing.IsHQ, name));
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' MISS (no fresh cache)");
                 continue;
             }
-            var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
             var current = listing.UnitPrice;
+            var decision = RepriceRules.Decide(current, marketCache.GetRaw(listing.ItemId, listing.IsHQ),
+                configuration.FloorFor(listing.ItemId), settings);
+            var lowest = decision.LowestCompetitor;
             var dropped = BaitFinder.Dropped(marketCache.GetOffers(listing.ItemId, listing.IsHQ), lowest);
             if (dropped.Count > 0)
             {
@@ -371,14 +376,16 @@ public sealed class RepriceTab
             }
             if (lowest <= 0)
             {
+                if (respectHold) editedPrice[EditKey(snap.Key, listing)] = decision.NewPrice;
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, no data)");
                 continue;
             }
-            var newPrice = lowest + offset;
-            if (newPrice < 1) newPrice = 1;
+            var newPrice = decision.NewPrice;
             editedPrice[EditKey(snap.Key, listing)] = newPrice;
+            if (decision.MarkForReview)
+                Plugin.ChatPrint($"{name} [{snap.RetainerName} #{listing.ListingIndex}] {Strings.PriceWarning(decision.Reason, current, newPrice)}");
             applied++;
-            Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} offset={offset} -> new={newPrice:N0}");
+            Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} -> new={newPrice:N0}");
         }
 
         if (missing.Count == 0)
@@ -499,7 +506,7 @@ public sealed class RepriceTab
             DrawUndercutters(l);
             ImGui.TableNextColumn();
             var editKey = EditKey(snap.Key, l);
-            DrawPriceInput(editKey);
+            DrawPriceInput(editKey, l.UnitPrice);
             ImGui.TableNextColumn();
             DrawProfit(l, editedPrice.GetValueOrDefault(editKey));
             ImGui.TableNextColumn();
@@ -729,14 +736,24 @@ public sealed class RepriceTab
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceFillTooltip);
     }
 
-    private void DrawPriceInput(string key)
+    internal static System.Numerics.Vector4 WarningColor(RepriceReason reason) =>
+        reason == RepriceReason.MaxRaise ? new(1f, 0.88f, 0.2f, 1f) : new(1f, 0.55f, 0.2f, 1f);
+
+    private void DrawPriceInput(string key, long current)
     {
         var v = (int)editedPrice.GetValueOrDefault(key, 0);
+        var warning = RepriceRules.LimitExceeded(current, v, configuration.MaxDropPercent, configuration.MaxRaisePercent);
+        if (warning.HasValue) ImGui.PushStyleColor(ImGuiCol.Text, WarningColor(warning.Value));
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputInt($"##price-{key}", ref v, 0))
         {
             if (v < 0) v = 0;
             editedPrice[key] = v;
+        }
+        if (warning.HasValue)
+        {
+            ImGui.PopStyleColor();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.PriceWarning(warning.Value, current, v));
         }
     }
 

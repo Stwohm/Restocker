@@ -18,9 +18,12 @@ Fork changes and where they live:
 - **Market data.** `MarketWatcher` keeps every competitor price (upstream kept only the first, so
   the outlier filter never ran) and writes empty lists for "no competitor". `MarketCache` has
   update timestamps; a fetch only accepts data newer than its ComparePrices click.
-- **Rules** (`Market/RepriceRules.cs`, tested): lowest competitor (outliers dropped) - undercut,
-  clamped to per-item floor, refused above `MaxDropPercent`. `Plan/AutoRepricePlanner.cs` applies
-  it per retainer.
+- **Rules** (`Market/RepriceRules.cs`, tested). Keep a low outlier group when our listing price is
+  positive and at most the group's highest price times the gap ratio (default 1.5). Only dropped
+  offers trigger bait notices. Undercut the selected lowest competitor and apply the per-item floor.
+  Automatic cycles skip changes exceeding `MaxDropPercent` or `MaxRaisePercent` (both default to
+  30%, 0 disables each limit). Manual prefill shows the same proposed prices and flags over-limit
+  changes for review before Apply. Full-cycle Hold takes precedence.
 - **Full cycle** (`ExecutionMode.FullCycle`, `Executor.StartFullCycle`): per retainer fetch -> plan
   -> apply -> next, no confirm dialog. **Auto cycle** (`Execution/AutoCycleController.cs`): timed full
   cycle at the bell, never persisted, stops on leave bell / move / combat / duty / cutscene /

@@ -5,6 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
 using Restocker.Localization;
+using Restocker.Market;
 
 namespace Restocker.Windows;
 
@@ -91,7 +92,16 @@ public sealed class ConfirmDialog
                 var name = sheet.TryGetRow(a.ItemId, out var row) ? row.Name.ExtractText() : $"#{a.ItemId}";
                 if (a.IsHQ) name += " (HQ)";
                 if (a.Kind == PlannedActionKind.Reprice)
+                {
                     ImGui.BulletText($"{name} #{a.ListingIndex} → {a.UnitPrice:N0} g");
+                    var config = Plugin.Configuration;
+                    if (RepriceRules.LimitExceeded(a.OldPrice, a.UnitPrice, config.MaxDropPercent, config.MaxRaisePercent) is { } reason)
+                    {
+                        ImGui.PushStyleColor(ImGuiCol.Text, RepriceTab.WarningColor(reason));
+                        ImGui.TextWrapped(Strings.PriceWarning(reason, a.OldPrice, a.UnitPrice));
+                        ImGui.PopStyleColor();
+                    }
+                }
                 else
                     ImGui.BulletText($"{name} ×{a.Quantity} @ {a.UnitPrice:N0} g");
             }

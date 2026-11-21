@@ -221,6 +221,14 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A new price more than this % below the current one is NOT applied; it is logged as max_drop.");
 
+        var maxRaise = (float)configuration.MaxRaisePercent;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputFloat(Strings.MaxRaiseSetting, ref maxRaise, 1f, 5f, "%.2f"))
+        {
+            configuration.MaxRaisePercent = Math.Max(0f, maxRaise);
+            configuration.Save();
+        }
+
         var history = configuration.FetchSaleHistory;
         if (ImGui.Checkbox(Strings.FetchSaleHistory, ref history))
         {

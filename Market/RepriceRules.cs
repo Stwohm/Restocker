@@ -32,6 +32,7 @@ public enum RepriceReason
 
     /// <summary>Automatic cycles are disabled for this item and quality.</summary>
     Held,
+    MaxRaise,
 }
 
 public sealed class RepriceSettings
@@ -40,6 +41,7 @@ public sealed class RepriceSettings
 
     /// <summary>Skip (do not apply) when the new price is more than this % below the current one. 0 disables.</summary>
     public double MaxDropPercent { get; init; } = 30;
+    public double MaxRaisePercent { get; init; } = 30;
 
     public int OutlierMaxGroupSize { get; init; } = 2;
     public double OutlierGapRatio { get; init; } = 1.5;
@@ -49,12 +51,16 @@ public readonly record struct RepriceDecision(
     long NewPrice,
     bool Apply,
     RepriceReason Reason,
-    long LowestCompetitor);
+    long LowestCompetitor)
+{
+    // Fork: manual prefill keeps the proposed price for either guarded change.
+    public bool MarkForReview => Reason is RepriceReason.MaxDrop or RepriceReason.MaxRaise;
+}
 
 /// <summary>
 /// Pure price rule for the auto / full-cycle path:
 /// lowest competitor (outliers ignored) - undercut, clamped to the item floor,
-/// refused when it would drop the price by more than <see cref="RepriceSettings.MaxDropPercent"/>.
+/// refused when the change exceeds the configured drop or raise limit.
 /// HQ and NQ are compared separately by the caller (it passes the matching list).
 /// </summary>
 public static class RepriceRules
@@ -65,6 +71,7 @@ public static class RepriceRules
         RepriceReason.Outlier => "outlier",
         RepriceReason.Floor => "floor",
         RepriceReason.MaxDrop => "max_drop",
+        RepriceReason.MaxRaise => "max_raise",
         RepriceReason.NoChange => "no_change",
         RepriceReason.NoCompetitor => "no_competitor",
         RepriceReason.Error => "error",
@@ -87,7 +94,7 @@ public static class RepriceRules
 
         var raw = competitorPricesAscending[0];
         var picked = LowestPriceResolver.Pick(
-            competitorPricesAscending, settings.OutlierMaxGroupSize, settings.OutlierGapRatio);
+            competitorPricesAscending, settings.OutlierMaxGroupSize, settings.OutlierGapRatio, currentPrice);
         if (picked <= 0)
             return new RepriceDecision(currentPrice, false, RepriceReason.Error, 0);
 
@@ -103,13 +110,21 @@ public static class RepriceRules
         if (target == currentPrice)
             return new RepriceDecision(target, false, RepriceReason.NoChange, picked);
 
-        if (settings.MaxDropPercent > 0 && currentPrice > 0 && target < currentPrice)
-        {
-            var dropPercent = (currentPrice - target) * 100.0 / currentPrice;
-            if (dropPercent > settings.MaxDropPercent)
-                return new RepriceDecision(target, false, RepriceReason.MaxDrop, picked);
-        }
+        if (LimitExceeded(currentPrice, target, settings.MaxDropPercent, settings.MaxRaisePercent) is { } limit)
+            return new RepriceDecision(target, false, limit, picked);
 
         return new RepriceDecision(target, true, reason, picked);
     }
+
+    // Fork: the editor and confirmation check the actual proposal, including manual edits.
+    public static RepriceReason? LimitExceeded(long current, long proposed, double maxDrop, double maxRaise)
+    {
+        if (current <= 0 || proposed <= 0) return null;
+        var change = ChangePercent(current, proposed);
+        if (maxRaise > 0 && change > maxRaise) return RepriceReason.MaxRaise;
+        if (maxDrop > 0 && -change > maxDrop) return RepriceReason.MaxDrop;
+        return null;
+    }
+
+    public static double ChangePercent(long current, long proposed) => (proposed - current) * 100.0 / current;
 }

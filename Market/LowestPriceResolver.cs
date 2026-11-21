@@ -21,7 +21,8 @@ public static class LowestPriceResolver
     public static long Pick(
         IReadOnlyList<long> pricesAscending,
         int maxOutlierGroupSize = 2,
-        double gapRatioThreshold = 1.5)
+        double gapRatioThreshold = 1.5,
+        long ourPrice = 0)
     {
         if (pricesAscending.Count == 0) return 0;
         if (pricesAscending.Count == 1) return pricesAscending[0];
@@ -39,7 +40,9 @@ public static class LowestPriceResolver
             var ratio = (double)pricesAscending[i + 1] / pricesAscending[i];
             if (ratio >= gapRatioThreshold)
             {
-                // i 以下を外れ値として弾く
+                // Fork: our listing corroborates this low group at or below its upper boundary.
+                if (ourPrice > 0 && ourPrice <= pricesAscending[i] * gapRatioThreshold)
+                    break;
                 outlierEnd = i + 1;
                 break;
             }
@@ -53,6 +56,7 @@ public static class LowestPriceResolver
     public static long Pick(
         IEnumerable<long> prices,
         int maxOutlierGroupSize = 2,
-        double gapRatioThreshold = 1.5)
-        => Pick(prices.OrderBy(p => p).ToList(), maxOutlierGroupSize, gapRatioThreshold);
+        double gapRatioThreshold = 1.5,
+        long ourPrice = 0)
+        => Pick(prices.OrderBy(p => p).ToList(), maxOutlierGroupSize, gapRatioThreshold, ourPrice);
 }
