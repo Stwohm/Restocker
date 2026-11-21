@@ -48,6 +48,8 @@ public sealed class Plugin : IDalamudPlugin
     private MarketWatcher MarketWatcher { get; }
     private UndercutHistoryHost Undercuts { get; }
     internal UndercutHistory UndercutHistory => Undercuts.History;
+    // Fork: market purchase cost basis.
+    private CostLedgerHost Costs { get; }
     private AutoCycleController AutoCycle { get; }
     public TrackerHost Tracker { get; }
     public Restocker.Plan.LowStockService LowStock { get; private set; } = null!;
@@ -61,6 +63,7 @@ public sealed class Plugin : IDalamudPlugin
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
         Undercuts = new UndercutHistoryHost(MarketWatcher, Configuration, Framework, PlayerState, ObjectTable, Log,
             PluginInterface.GetPluginConfigDirectory());
+        Costs = new CostLedgerHost(MarketBoard, Framework, Log, PluginInterface.GetPluginConfigDirectory());
         Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory());
         SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
@@ -76,7 +79,7 @@ public sealed class Plugin : IDalamudPlugin
             () => ArDetector.IsAutoRetainerLoaded(), arIpc);
 
         LowStock = new Restocker.Plan.LowStockService(Framework, Configuration, Tracker.Tracker, MarketWatcher.Cache);
-        MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle);
+        MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle, Costs.Ledger);
         WindowSystem.AddWindow(MainWindow);
         ProgressWindow = new ProgressWindow(Executor);
         WindowSystem.AddWindow(ProgressWindow);
@@ -123,6 +126,7 @@ public sealed class Plugin : IDalamudPlugin
         MarketWatcher.Dispose();
         SaleHistory.Dispose();
         Undercuts.Dispose();
+        Costs.Dispose();
         Tracker.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();

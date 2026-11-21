@@ -17,6 +17,9 @@ namespace Restocker.Windows;
 /// </summary>
 public sealed class RepriceTab
 {
+    // Fork: fixed seller tax used for the profit estimate.
+    private const decimal SaleTaxRate = 0.05m;
+    private readonly CostLedger costLedger;
     private readonly Configuration configuration;
     private readonly Executor executor;
     private readonly ConfirmDialog confirmDialog;
@@ -34,13 +37,14 @@ public sealed class RepriceTab
     /// <summary>適用前のプランリスト。</summary>
     private readonly List<RepricePlan> pendingPlans = new();
 
-    public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache, AutoCycleController autoCycle)
+    public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache, AutoCycleController autoCycle, CostLedger costLedger)
     {
         this.autoCycle = autoCycle;
         this.configuration = configuration;
         this.executor = executor;
         this.confirmDialog = confirmDialog;
         this.marketCache = marketCache;
+        this.costLedger = costLedger;
     }
 
     public void Draw()
@@ -444,8 +448,8 @@ public sealed class RepriceTab
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        // Fork: #, Item, Qty, Current, undercutters icon, New, Hold, fill, +Add = 9
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 9, flags)) return;
+        // Fork: #, Item, Qty, Current, undercutters icon, New, Profit, Hold, fill, +Add = 10
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 10, flags)) return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f);
@@ -453,6 +457,7 @@ public sealed class RepriceTab
         ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableSetupColumn("##cheaper", ImGuiTableColumnFlags.WidthFixed, 24);
         ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColProfit, ImGuiTableColumnFlags.WidthFixed, 75);
         ImGui.TableSetupColumn(Strings.ColHold, ImGuiTableColumnFlags.WidthFixed, 55);
         ImGui.TableSetupColumn("##fill", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
@@ -472,7 +477,10 @@ public sealed class RepriceTab
             ImGui.TableNextColumn();
             DrawUndercutters(l);
             ImGui.TableNextColumn();
-            DrawPriceInput(EditKey(snap.Key, l));
+            var editKey = EditKey(snap.Key, l);
+            DrawPriceInput(editKey);
+            ImGui.TableNextColumn();
+            DrawProfit(l, editedPrice.GetValueOrDefault(editKey));
             ImGui.TableNextColumn();
             DrawHoldCheckbox(snap.Key, l);
             ImGui.TableNextColumn();
@@ -482,6 +490,38 @@ public sealed class RepriceTab
         }
 
         ImGui.EndTable();
+    }
+
+    // Fork: show per-unit profit using the next lot's cost.
+    private void DrawProfit(ListingEntry listing, long edited)
+    {
+        var price = edited > 0 ? edited : listing.UnitPrice;
+        var afterTax = price * (1m - SaleTaxRate);
+        var unitCost = costLedger.CurrentUnitCost(listing.ItemId, listing.IsHQ);
+        if (unitCost is { } cost)
+        {
+            var profit = afterTax - cost;
+            var color = profit > 0
+                ? new System.Numerics.Vector4(0.4f, 0.85f, 0.45f, 1f)
+                : new System.Numerics.Vector4(1f, 0.45f, 0.4f, 1f);
+            ImGui.TextColored(color, profit.ToString("N0"));
+        }
+        else
+            ImGui.TextDisabled("-");
+
+        if (!ImGui.IsItemHovered()) return;
+        ImGui.BeginTooltip();
+        ImGui.TextUnformatted($"{Strings.CostUnitCost}  {unitCost?.ToString("N2") ?? "-"}");
+        ImGui.TextUnformatted(string.Format(Strings.CostPriceAfterTax, SaleTaxRate, afterTax));
+        ImGui.TextUnformatted($"{Strings.CostWeightedAverage}  {costLedger.WeightedAverageCost(listing.ItemId, listing.IsHQ)?.ToString("N2") ?? "-"}");
+        if (unitCost.HasValue)
+        {
+            ImGui.Separator();
+            ImGui.TextUnformatted(Strings.CostFifoLots);
+            foreach (var lot in costLedger.GetLots(listing.ItemId, listing.IsHQ))
+                ImGui.TextUnformatted(string.Format(Strings.CostLotDetails, lot.Utc.ToLocalTime(), lot.RemainingQuantity, lot.UnitCost, Strings.CostSourceName(lot.Source)));
+        }
+        ImGui.EndTooltip();
     }
 
     // Fork: display competitors from the last scan and the past week's most active rivals.
