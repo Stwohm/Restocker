@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
@@ -463,13 +464,18 @@ public sealed class RepriceTab
         ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableHeadersRow();
 
+        var tracker = Plugin.Instance.Tracker.Tracker;
+        var now = DateTime.UtcNow;
+        var tracked = tracker.Records.Where(r => r.RetainerKey == snap.Key && r.Outcome == ListingTracker.Active)
+            .ToLookup(r => (r.Slot, r.ItemId, r.IsHq, r.Quantity));
         foreach (var (l, name) in rows)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(l.ListingIndex.ToString());
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(name);
+            var record = tracked[(l.ListingIndex, l.ItemId, l.IsHQ, l.Quantity)].FirstOrDefault();
+            DrawItemName(l, name, record, tracker, now);
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(l.Quantity.ToString());
             ImGui.TableNextColumn();
@@ -490,6 +496,28 @@ public sealed class RepriceTab
         }
 
         ImGui.EndTable();
+    }
+
+    // Fork: show listing age and recorded sales together on the item name.
+    private void DrawItemName(ListingEntry listing, string name, ListingRecord? record, ListingTracker tracker, DateTime now)
+    {
+        var stuck = record != null && ListingTracker.IsStuck(record, now, configuration.StuckListingDays);
+        var age = record == null ? 0 : (now - record.FirstSeenUtc).TotalDays;
+        ImGui.TextUnformatted(stuck ? $"{name} ({string.Format(Strings.DaysShort, Math.Floor(age))})" : name);
+        if (!ImGui.IsItemHovered()) return;
+
+        ImGui.BeginTooltip();
+        if (stuck && record != null)
+        {
+            var offers = marketCache.GetOffers(listing.ItemId, listing.IsHQ);
+            var lowest = offers.Count > 0 ? offers[0].Price.ToString("N0") : "—";
+            ImGui.TextUnformatted(string.Format(Strings.StuckTooltip, age, record.RepriceCount, lowest));
+            ImGui.Separator();
+        }
+        var velocity = SalesVelocity.Calculate(tracker.GetSales(listing.ItemId, listing.IsHQ), now);
+        var stock = Plugin.Instance.LowStock.GetTrackedStock().GetValueOrDefault((listing.ItemId, listing.IsHQ));
+        SalesVelocityDisplay.DrawTooltip(velocity, stock.Listed, stock.Available);
+        ImGui.EndTooltip();
     }
 
     // Fork: show per-unit profit using the next lot's cost.

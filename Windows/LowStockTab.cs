@@ -4,6 +4,8 @@ using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Restocker.Common;
 using Restocker.Execution;
+using Restocker.Localization;
+using Restocker.Market;
 using Restocker.Plan;
 
 namespace Restocker.Windows;
@@ -96,6 +98,8 @@ public sealed class LowStockTab
         ImGui.TableHeadersRow();
 
         LowStockEntry? remove = null;
+        var now = DateTime.UtcNow;
+        var tracker = Plugin.Instance.Tracker.Tracker;
         foreach (var e in configuration.LowStock)
         {
             var id = $"{e.ItemId}-{e.IsHq}";
@@ -114,6 +118,11 @@ public sealed class LowStockTab
             var th = e.Threshold;
             ImGui.SetNextItemWidth(-1);
             if (ImGui.InputInt($"##th-{id}", ref th, 0)) { e.Threshold = Math.Max(0, th); configuration.Save(); }
+            var thresholdHovered = ImGui.IsItemHovered();
+            var velocity = SalesVelocity.Calculate(tracker.GetSales(e.ItemId, e.IsHq), now);
+            ImGui.TextDisabled($"≈{velocity.SuggestedThreshold:N0}");
+            if (thresholdHovered || ImGui.IsItemHovered())
+                ImGui.SetTooltip(string.Format(Strings.SuggestedThreshold, velocity.SuggestedThreshold));
 
             ImGui.TableNextColumn();
             var per = e.PerListing;

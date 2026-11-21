@@ -64,7 +64,8 @@ public sealed class Plugin : IDalamudPlugin
         Undercuts = new UndercutHistoryHost(MarketWatcher, Configuration, Framework, PlayerState, ObjectTable, Log,
             PluginInterface.GetPluginConfigDirectory());
         Costs = new CostLedgerHost(MarketBoard, Framework, Log, PluginInterface.GetPluginConfigDirectory());
-        Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory());
+        Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory(),
+            Configuration, Costs.Ledger.Consume);
         SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
             Tracker.Tracker.ObserveCompetitors(item, hq, offers, DateTime.UtcNow);

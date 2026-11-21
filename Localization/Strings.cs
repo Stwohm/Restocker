@@ -42,6 +42,38 @@ public static class Strings
     public static string Buyer => T("Buyer", "購入者", "Käufer", "Acheteur", "购买人", "구매자");
     public static string SaleTime => T("Sale time", "取引日時", "Verkaufszeit", "Date de vente", "交易时间", "판매 일시");
 
+    // Fork: realized profit, stuck listings and sales velocity.
+    public static string SalesListings => T("Listings", "出品", "Angebote", "Annonces", "上架记录", "등록 내역");
+    public static string SalesPeriod => T("Period", "期間", "Zeitraum", "Période", "时段", "기간");
+    public static string SalesAllTime => T("All time", "全期間", "Gesamter Zeitraum", "Tout l’historique", "全部时间", "전체 기간");
+    public static string SalesRealizedProfit => T("Realized profit", "実現利益", "Realisierter Gewinn", "Bénéfice réalisé", "已实现利润", "실현 이익");
+    public static string SalesProfitTotal => T("Total realized profit  {0}", "実現利益合計  {0}", "Realisierter Gewinn gesamt  {0}", "Bénéfice réalisé total  {0}", "已实现利润合计  {0}", "실현 이익 합계  {0}");
+    public static string SalesProfitIncomplete => T("({0:N0} sales with missing cost or proceeds)", "（原価または売上が不明な取引 {0:N0} 件）", "({0:N0} Verkäufe mit fehlenden Kosten oder Erlösen)", "({0:N0} ventes avec coût ou recette manquants)", "（{0:N0} 笔交易缺少成本或收入）", "(원가 또는 판매 대금이 누락된 거래 {0:N0}건)");
+    public static string SalesProfitDetails => T("Recorded cost  {0:N2}\nUnits with unknown cost  {1:N0}", "記録原価  {0:N2}\n原価不明の個数  {1:N0}", "Erfasste Kosten  {0:N2}\nStück ohne bekannte Kosten  {1:N0}", "Coût enregistré  {0:N2}\nUnités au coût inconnu  {1:N0}", "已记录成本  {0:N2}\n成本未知的数量  {1:N0}", "기록된 원가  {0:N2}\n원가 미상 수량  {1:N0}");
+    public static string SalesNoCostBasis => T("No cost basis was recorded for this sale.", "この取引の原価は記録されていません。", "Für diesen Verkauf wurden keine Kosten erfasst.", "Aucun coût d’achat enregistré pour cette vente.", "此笔交易未记录成本。", "이 거래의 원가가 기록되지 않았습니다.");
+    public static string StuckSetting => T("Stuck listing age (days)", "滞留とみなす出品日数", "Alter für Ladenhüter (Tage)", "Âge des annonces stagnantes (jours)", "滞销判定天数", "장기 미판매 기준(일)");
+    public static string StuckListings => T("Stuck", "滞留", "Ladenhüter", "En stagnation", "滞销", "장기 미판매");
+    public static string StuckEmpty => T("No stuck listings.", "滞留している出品はありません。", "Keine Ladenhüter.", "Aucune annonce stagnante.", "没有滞销商品。", "장기 미판매 등록이 없습니다.");
+    public static string StuckRetainer => T("Retainer", "リテイナー", "Gehilfe", "Intendant", "雇员", "리테이너");
+    public static string StuckDays => T("Days up", "出品日数", "Tage im Angebot", "Jours en vente", "上架天数", "등록 일수");
+    public static string StuckReprices => T("Reprices", "価格変更回数", "Preisänderungen", "Révisions de prix", "改价次数", "가격 변경 횟수");
+    public static string DaysShort => T("{0:N0}d", "{0:N0}日", "{0:N0} T.", "{0:N0} j", "{0:N0}天", "{0:N0}일");
+    public static string StuckTooltip => T("Up for {0:N1} days, {1:N0} reprices, lowest rival now {2}", "出品から{0:N1}日、価格変更{1:N0}回、競合の最新最安値 {2}", "Seit {0:N1} Tagen im Angebot, {1:N0} Preisänderungen, niedrigster Konkurrenzpreis {2}", "En vente depuis {0:N1} jours, {1:N0} révisions, prix concurrent le plus bas {2}", "已上架 {0:N1} 天，改价 {1:N0} 次，当前竞争对手最低价 {2}", "등록 후 {0:N1}일, 가격 변경 {1:N0}회, 현재 경쟁 최저가 {2}");
+    public static string StuckAlert => T("{0} on {1} has been up for {2:N1} days.", "{1}の{0}は出品から{2:N1}日が経過しました。", "{0} bei {1} ist seit {2:N1} Tagen im Angebot.", "{0} est en vente chez {1} depuis {2:N1} jours.", "{1}的{0}已上架 {2:N1} 天。", "{1}의 {0} 등록 후 {2:N1}일이 지났습니다.");
+    public static string SalesVelocity => T("Velocity", "販売ペース", "Absatztempo", "Rythme des ventes", "销售速度", "판매 속도");
+    public static string Velocity24h => T("24h", "24時間", "24 Std.", "24 h", "24小时", "24시간");
+    public static string Velocity3d => T("3d", "3日", "3 Tage", "3 j", "3天", "3일");
+    public static string Velocity7d => T("7d", "7日", "7 Tage", "7 j", "7天", "7일");
+    public static string Velocity30d => T("30d", "30日", "30 Tage", "30 j", "30天", "30일");
+    public static string VelocityCounts => T("{0:N0} units / {1:N0} sales", "{0:N0}個 / {1:N0}件", "{0:N0} Stk. / {1:N0} Verkäufe", "{0:N0} unités / {1:N0} ventes", "{0:N0} 件 / {1:N0} 笔", "{0:N0}개 / {1:N0}건");
+    public static string VelocityHours7d => T("Avg. hours between sales (7d)", "平均販売間隔・時（7日）", "Ø Stunden zwischen Verkäufen (7 T.)", "Intervalle moyen en h (7 j)", "平均销售间隔（7天，小时）", "평균 판매 간격(7일, 시간)");
+    public static string VelocityHours30d => T("Avg. hours between sales (30d)", "平均販売間隔・時（30日）", "Ø Stunden zwischen Verkäufen (30 T.)", "Intervalle moyen en h (30 j)", "平均销售间隔（30天，小时）", "평균 판매 간격(30일, 시간)");
+    public static string VelocityHours7dShort => T("Avg. h (7d)", "平均時（7日）", "Ø Std. (7 T.)", "Moy. h (7 j)", "平均小时（7天）", "평균 시간(7일)");
+    public static string VelocityHours30dShort => T("Avg. h (30d)", "平均時（30日）", "Ø Std. (30 T.)", "Moy. h (30 j)", "平均小时（30天）", "평균 시간(30일)");
+    public static string VelocityTableLegend => T("Units / sales per period. Average hours between sales.", "期間ごとの販売個数 / 件数と平均販売間隔（時間）。", "Stück / Verkäufe pro Zeitraum. Durchschnittliche Stunden zwischen Verkäufen.", "Unités / ventes par période. Intervalle moyen entre les ventes en heures.", "各时段的销量 / 笔数，以及两笔销售之间的平均小时数。", "기간별 판매 수량 / 건수 및 평균 판매 간격(시간).");
+    public static string VelocityStockDays => T("Days of stock", "在庫日数", "Reichweite in Tagen", "Jours de stock", "库存可售天数", "재고 일수");
+    public static string SuggestedThreshold => T("Suggested threshold  {0:N0} (one day of sales at the 7-day rate)", "推奨しきい値  {0:N0}（直近7日の1日平均販売数）", "Vorgeschlagener Grenzwert  {0:N0} (ein Verkaufstag im 7-Tage-Schnitt)", "Seuil suggéré  {0:N0} (un jour de ventes au rythme des 7 derniers jours)", "建议阈值  {0:N0}（近7天的日均销量）", "추천 기준  {0:N0} (최근 7일 기준 하루 판매량)");
+
     public static string WindowTitle => "Restocky";
 
     // Tabs

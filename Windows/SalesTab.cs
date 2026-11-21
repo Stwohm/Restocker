@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Restocker.Market;
@@ -11,13 +12,35 @@ public sealed class SalesTab
 {
     private string filter = string.Empty;
     private bool showEnded = true;
+    private int period;
+    private const ImGuiTableFlags TableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+                                             | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable;
 
     public void Draw()
     {
         var host = Plugin.Instance?.Tracker;
-        if (host == null) return;
-        var records = host.Tracker.Records;
+        if (host == null || !ImGui.BeginTabBar("##sales-sections")) return;
+        var now = DateTime.UtcNow;
+        if (ImGui.BeginTabItem(Strings.SalesListings + "###sales-listings"))
+        {
+            DrawListings(host.Tracker, now);
+            ImGui.EndTabItem();
+        }
+        if (ImGui.BeginTabItem(Strings.SalesVelocity + "###sales-velocity"))
+        {
+            DrawVelocity(host.Tracker, now);
+            ImGui.EndTabItem();
+        }
+        if (ImGui.BeginTabItem(Strings.StuckListings + "###sales-stuck"))
+        {
+            DrawStuck(host.Tracker, now);
+            ImGui.EndTabItem();
+        }
+        ImGui.EndTabBar();
+    }
 
+    private void DrawListings(ListingTracker tracker, DateTime now)
+    {
         ImGui.SetNextItemWidth(240);
         ImGui.InputTextWithHint("##sales-filter", "Filter item / retainer / competitor", ref filter, 64);
         ImGui.SameLine();
@@ -36,14 +59,17 @@ public sealed class SalesTab
             catch (Exception ex) { Plugin.Log.Warning(ex, "[Restocker] open folder failed"); }
         }
 
-        var sold = records.Where(r => r.Outcome == ListingTracker.Sold).ToList();
-        if (sold.Count > 0)
-        {
-            ImGui.TextDisabled($"Sold: {sold.Count} listings, {sold.Sum(r => r.SoldTotalGil):N0} gil, avg {sold.Average(r => r.DaysListed):0.0} days, avg {sold.Average(r => r.RepriceCount):0.0} reprices");
-        }
+        // Fork: the visible period filters ended rows and the realized profit total together.
+        string[] periods = [Strings.SalesAllTime, Strings.Velocity24h, Strings.Velocity3d, Strings.Velocity7d, Strings.Velocity30d];
+        ImGui.SetNextItemWidth(145);
+        ImGui.Combo(Strings.SalesPeriod + "###sales-period", ref period, periods, periods.Length);
+        int[] periodDays = [0, 1, 3, 7, 30];
+        var since = now.AddDays(-periodDays[period]);
 
-        var rows = records
+        var rows = tracker.Records
             .Where(r => showEnded || r.Outcome == ListingTracker.Active)
+            .Where(r => period == 0 || r.Outcome == ListingTracker.Active
+                || (r.RecordedSaleUtc ?? r.LastSeenUtc) >= since && (r.RecordedSaleUtc ?? r.LastSeenUtc) <= now)
             .Where(r => filter.Length == 0
                         || r.ItemName.Contains(filter, StringComparison.OrdinalIgnoreCase)
                         || r.RetainerName.Contains(filter, StringComparison.OrdinalIgnoreCase)
@@ -52,9 +78,21 @@ public sealed class SalesTab
             .ThenByDescending(r => r.EndedUtc ?? r.LastSeenUtc)
             .ToList();
 
-        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
-                                      | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable;
-        if (!ImGui.BeginTable("##sales", 12, flags)) return;
+        var sold = rows.Where(r => r.Outcome == ListingTracker.Sold).ToList();
+        if (sold.Count > 0)
+        {
+            ImGui.TextDisabled($"Sold: {sold.Count} listings, {sold.Sum(r => r.SoldTotalGil):N0} gil, avg {sold.Average(r => r.DaysListed):0.0} days, avg {sold.Average(r => r.RepriceCount):0.0} reprices");
+            var total = sold.Any(r => r.RealizedProfit.HasValue) ? sold.Sum(r => r.RealizedProfit).GetValueOrDefault().ToString("N2") : "—";
+            ImGui.TextUnformatted(string.Format(Strings.SalesProfitTotal, total));
+            var incomplete = sold.Count(r => r.RealizedProfit == null || r.UnknownCostUnits > 0);
+            if (incomplete > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled(string.Format(Strings.SalesProfitIncomplete, incomplete));
+            }
+        }
+
+        if (!ImGui.BeginTable("##sales", 13, TableFlags)) return;
         ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 0.25f);
         ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthStretch, 0.1f);
@@ -68,6 +106,7 @@ public sealed class SalesTab
         ImGui.TableSetupColumn("Sold for", ImGuiTableColumnFlags.WidthStretch, 0.09f);
         ImGui.TableSetupColumn(Strings.Buyer);
         ImGui.TableSetupColumn(Strings.SaleTime);
+        ImGui.TableSetupColumn(Strings.SalesRealizedProfit);
         ImGui.TableHeadersRow();
 
         foreach (var r in rows)
@@ -88,12 +127,95 @@ public sealed class SalesTab
                 ImGui.SetTooltip(string.Join("\n", r.Competitors.Values.OrderBy(c => c.LowestPrice)
                     .Select(c => $"{c.Seller}: up to {c.MaxQuantity}x, lowest {c.LowestPrice:N0}, seen {c.TimesSeen}, below us {c.TimesBelowUs}")));
             ImGui.TableNextColumn();
-            var days = r.DaysListed ?? (DateTime.UtcNow - r.FirstSeenUtc).TotalDays;
+            var days = r.DaysListed ?? (now - r.FirstSeenUtc).TotalDays;
             ImGui.TextUnformatted(r.HistoryOnly ? "" : days.ToString("0.0"));
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.Outcome);
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.SoldTotalGil > 0 ? r.SoldTotalGil.ToString("N0") : "");
             ImGui.TableNextColumn(); ImGui.TextUnformatted(r.BuyerName ?? "");
             ImGui.TableNextColumn(); ImGui.TextUnformatted((r.SaleTimeUtc ?? r.SoldRecordedUtc)?.ToLocalTime().ToString("G") ?? "");
+            ImGui.TableNextColumn();
+            if (r.Outcome == ListingTracker.Sold) DrawRealizedProfit(r);
+        }
+        ImGui.EndTable();
+    }
+
+    private static void DrawRealizedProfit(ListingRecord sale)
+    {
+        var value = sale.RealizedProfit?.ToString("N2") ?? "—";
+        ImGui.TextUnformatted(sale.RealizedProfit != null && sale.UnknownCostUnits > 0 ? value + "*" : value);
+        if (!ImGui.IsItemHovered()) return;
+        ImGui.SetTooltip(sale.ConsumedCost is { } cost
+            ? string.Format(Strings.SalesProfitDetails, cost, sale.UnknownCostUnits)
+            : Strings.SalesNoCostBasis);
+    }
+
+    private static void DrawVelocity(ListingTracker tracker, DateTime now)
+    {
+        var stock = Plugin.Instance.LowStock.GetTrackedStock();
+        var rows = tracker.GetSales().GroupBy(s => (s.ItemId, s.IsHq))
+            .Select(g => (g.Key, Name: g.First().ItemName, Velocity: SalesVelocity.Calculate(g, now)));
+
+        ImGui.TextDisabled(Strings.VelocityTableLegend);
+        if (!ImGui.BeginTable("##velocity-table", 8, TableFlags | ImGuiTableFlags.Sortable)) return;
+        const ImGuiTableColumnFlags noSort = ImGuiTableColumnFlags.NoSort;
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn(Strings.ColItem, noSort | ImGuiTableColumnFlags.WidthStretch, 2);
+        ImGui.TableSetupColumn(Strings.Velocity24h, noSort);
+        ImGui.TableSetupColumn(Strings.Velocity3d, noSort);
+        ImGui.TableSetupColumn(Strings.Velocity7d, ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn(Strings.Velocity30d, noSort);
+        ImGui.TableSetupColumn(Strings.VelocityHours7dShort, noSort);
+        ImGui.TableSetupColumn(Strings.VelocityHours30dShort, noSort);
+        ImGui.TableSetupColumn(Strings.VelocityStockDays, noSort);
+        ImGui.TableHeadersRow();
+
+        var sort = ImGui.TableGetSortSpecs();
+        var ascending = sort.SpecsCount > 0 && sort.Specs.SortDirection == ImGuiSortDirection.Ascending;
+        var sorted = ascending ? rows.OrderBy(r => r.Velocity.Last7d.Units) : rows.OrderByDescending(r => r.Velocity.Last7d.Units);
+        foreach (var row in sorted.ThenBy(r => r.Name).ThenBy(r => r.Key.IsHq))
+        {
+            var velocity = row.Velocity;
+            var supply = stock.GetValueOrDefault(row.Key);
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(row.Name + (row.Key.IsHq ? " (HQ)" : ""));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.CompactCounts(velocity.Last24h));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.CompactCounts(velocity.Last3d));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.CompactCounts(velocity.Last7d));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.CompactCounts(velocity.Last30d));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.Number(velocity.Last7d.AverageHoursBetweenSales));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.Number(velocity.Last30d.AverageHoursBetweenSales));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(SalesVelocityDisplay.Number(velocity.DaysOfStock(supply.Listed, supply.Available)));
+        }
+        ImGui.EndTable();
+    }
+
+    private static void DrawStuck(ListingTracker tracker, DateTime now)
+    {
+        var rows = tracker.Records.Where(r => ListingTracker.IsStuck(r, now, Plugin.Configuration.StuckListingDays))
+            .OrderBy(r => r.FirstSeenUtc).ToList();
+        if (rows.Count == 0)
+        {
+            ImGui.TextDisabled(Strings.StuckEmpty);
+            return;
+        }
+        if (!ImGui.BeginTable("##stuck-table", 6, TableFlags)) return;
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn(Strings.ColItem);
+        ImGui.TableSetupColumn(Strings.StuckRetainer);
+        ImGui.TableSetupColumn(Strings.ColTotalQty);
+        ImGui.TableSetupColumn(Strings.StuckDays);
+        ImGui.TableSetupColumn(Strings.StuckReprices);
+        ImGui.TableSetupColumn(Strings.ColCurrentPrice);
+        ImGui.TableHeadersRow();
+        foreach (var listing in rows)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(listing.ItemName + (listing.IsHq ? " (HQ)" : ""));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(listing.RetainerName);
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(listing.Quantity.ToString("N0"));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted((now - listing.FirstSeenUtc).TotalDays.ToString("N1"));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(listing.RepriceCount.ToString("N0"));
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(listing.LastPrice > 0 ? listing.LastPrice.ToString("N0") : Strings.PriceUnknown);
         }
         ImGui.EndTable();
     }

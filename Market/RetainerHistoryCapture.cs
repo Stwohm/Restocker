@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -70,7 +71,8 @@ internal sealed unsafe class RetainerHistoryCapture : IDisposable
             try
             {
                 var items = Plugin.DataManager.GetExcelSheet<Item>();
-                foreach (var sale in packet.Sales)
+                // Fork: apply FIFO costs in transaction order within each history response.
+                foreach (var sale in packet.Sales.OrderBy(s => s.UnixSeconds))
                     tracker.OnHistorySale(packet.Key, packet.Name, sale,
                         id => items.TryGetRow(id, out var row) ? row.Name.ExtractText() : $"#{id}");
                 receipts[packet.Key] = Receipt(packet.Key) + 1;

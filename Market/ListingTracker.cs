@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Restocker.Data;
 
 namespace Restocker.Market;
@@ -76,15 +77,27 @@ public sealed class ListingRecord
     public DateTime? SaleTimeUtc { get; set; }
     public bool HistoryOnly { get; set; }
 
+    // Fork: null cost identifies sales recorded before cost tracking was available.
+    public decimal? ConsumedCost { get; set; }
+    public int? UnknownCostUnits { get; set; }
+    public bool StuckNotified { get; set; }
+
+    [JsonIgnore]
+    public DateTime? RecordedSaleUtc => SaleTimeUtc ?? SoldRecordedUtc ?? EndedUtc;
+    [JsonIgnore]
+    public decimal? RealizedProfit => Outcome == ListingTracker.Sold && (SoldTotalGil > 0 || HistoryKey != null)
+        ? SoldTotalGil - ConsumedCost : null;
     public double? DaysListed => !HistoryOnly && EndedUtc is { } e ? (e - FirstSeenUtc).TotalDays : null;
 }
+
+public delegate (decimal ConsumedCost, int UnknownUnits) SaleCostConsumer(uint itemId, bool hq, int quantity, DateTime saleUtc);
 
 /// <summary>
 /// Fork: per-listing lifecycle + competitor bookkeeping. Pure logic with an injected clock;
 /// the plugin feeds it from RetainerWatcher (listings), MarketWatcher (competitors), Executor
 /// (applied reprices) and the RetainerSale chat message.
 /// </summary>
-public sealed class ListingTracker
+public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
 {
     public const string Active = "active";
     public const string Sold = "sold";
@@ -108,6 +121,19 @@ public sealed class ListingTracker
 
     public IEnumerable<ListingRecord> ActiveFor(uint itemId, bool hq)
         => Records.Where(r => r.Outcome == Active && r.ItemId == itemId && r.IsHq == hq);
+
+    // Fork: stuck age follows the listing through reprices and slot moves.
+    public static bool IsStuck(ListingRecord listing, DateTime nowUtc, int thresholdDays)
+        => listing.Outcome == Active && listing.MissingSinceUtc == null
+            && (nowUtc - listing.FirstSeenUtc).TotalDays >= Math.Max(1, thresholdDays);
+
+    public bool TryMarkStuckNotified(ListingRecord listing, DateTime nowUtc, int thresholdDays)
+    {
+        if (listing.StuckNotified || !IsStuck(listing, nowUtc, thresholdDays)) return false;
+        listing.StuckNotified = true;
+        Dirty = true;
+        return true;
+    }
 
     /// <summary>The retainer's sell list as read now. Only call with a loaded container.</summary>
     public void ObserveRetainer(
@@ -273,9 +299,11 @@ public sealed class ListingTracker
     public static long NetFromGross(long grossGil) => grossGil <= 0 ? 0 : (long)(grossGil * SaleNetRate);
 
     // Fork: include chat-only sales, whose receipt time is the best available timestamp.
+    public IEnumerable<ListingRecord> GetSales() => Records.Where(r => r.Outcome == Sold);
+
     public IEnumerable<ListingRecord> GetSales(uint itemId, bool hq)
-        => Records.Where(r => r.Outcome == Sold && r.ItemId == itemId && r.IsHq == hq)
-            .OrderByDescending(r => r.SaleTimeUtc ?? r.SoldRecordedUtc ?? r.EndedUtc);
+        => GetSales().Where(r => r.ItemId == itemId && r.IsHq == hq)
+            .OrderByDescending(r => r.RecordedSaleUtc);
 
     public void OnHistorySale(string retainerKey, string retainerName, RetainerHistorySale sale,
         Func<uint, string> itemName)
@@ -293,6 +321,14 @@ public sealed class ListingTracker
                 && Math.Abs(r.SoldTotalGil - sale.NetGil) <= Tolerance(sale.NetGil))
             .OrderBy(r => Math.Abs(r.SoldTotalGil - sale.NetGil))
             .ThenBy(r => (r.SoldRecordedUtc!.Value - time).Duration()).FirstOrDefault();
+        // Fork: a game notice may have closed the stack even when its proceeds could not be parsed.
+        if (rec == null)
+        {
+            var unpriced = reported.Where(r => r.SoldSource == GameSaleSource && r.SoldTotalGil == 0
+                && (r.SoldRecordedUtc!.Value - time).Duration() <= DuplicateSaleWindow
+                && Difference(r, sale.NetGil) <= Tolerance(sale.NetGil)).Take(2).ToList();
+            if (unpriced.Count == 1) rec = unpriced[0];
+        }
         var listings = candidates.Where(r => r.LastSeenUtc < time.AddSeconds(1)
                 && (r.Outcome == Active || (r.Outcome == Gone && r.EndedUtc >= time)))
             .OrderByDescending(r => r.Outcome == Gone).ThenByDescending(r => r.LastSeenUtc).ToList();
@@ -307,6 +343,7 @@ public sealed class ListingTracker
         rec ??= BestWithinTolerance(listings, sale.NetGil);
         // A single eligible stack can have changed price since our last observation.
         if (rec == null && listings.Count == 1) rec = listings[0];
+        var newRecord = rec == null;
         if (rec == null)
         {
             rec = new ListingRecord
@@ -316,7 +353,6 @@ public sealed class ListingTracker
                 IsHq = sale.IsHq, Quantity = sale.Quantity, Slot = -1, HistoryOnly = true,
                 FirstSeenUtc = time, LastSeenUtc = time,
             };
-            Records.Add(rec);
         }
         else if (rec.SoldGrossGil == null && NetFromGross(rec.LastPrice * rec.Quantity) == sale.NetGil)
         {
@@ -326,12 +362,13 @@ public sealed class ListingTracker
         // Keep the original chat source and receipt time for paired-notice deduplication.
         var source = rec.Outcome == Sold ? rec.SoldSource : "history";
         var receipt = rec.SoldRecordedUtc ?? time;
-        MarkSold(rec, sale.NetGil, receipt, keepEndedUtc: false, source);
+        MarkSold(rec, sale.NetGil, receipt, keepEndedUtc: false, source, saleUtc: time);
         rec.EndedUtc = time;
         rec.HistoryKey = key;
         rec.SaleTimeUtc = time;
         rec.BuyerName = sale.Buyer;
         rec.IsMannequin = sale.IsMannequin;
+        if (newRecord) Records.Add(rec);
     }
 
     private static ListingRecord? BestWithinTolerance(IEnumerable<ListingRecord> candidates, long netGil)
@@ -351,8 +388,13 @@ public sealed class ListingTracker
             && Math.Abs((decimal)r.SoldTotalGil - netGil) <= Tolerance(netGil));
     }
 
-    private void MarkSold(ListingRecord rec, long totalGil, DateTime nowUtc, bool keepEndedUtc, string source)
+    private void MarkSold(ListingRecord rec, long totalGil, DateTime nowUtc, bool keepEndedUtc, string source,
+        DateTime? saleUtc = null)
     {
+        // Fork: history enrichment updates proceeds and timing on the same sold record.
+        if (rec.Outcome != Sold && consumeCost != null)
+            (rec.ConsumedCost, rec.UnknownCostUnits) = consumeCost(rec.ItemId, rec.IsHq, rec.Quantity, saleUtc ?? nowUtc);
+
         rec.Outcome = Sold;
         if (!keepEndedUtc) rec.EndedUtc = nowUtc;
         rec.SoldTotalGil = totalGil;
@@ -371,18 +413,18 @@ public sealed class ListingTracker
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    public static ListingTracker Load(string path)
+    public static ListingTracker Load(string path, SaleCostConsumer? consumeCost = null)
     {
         try
         {
             if (File.Exists(path))
             {
                 var recs = JsonSerializer.Deserialize<List<ListingRecord>>(File.ReadAllText(path));
-                if (recs != null) return new ListingTracker { Records = recs };
+                if (recs != null) return new ListingTracker(consumeCost) { Records = recs };
             }
         }
         catch { /* corrupt file: start fresh, keep the old one aside */ TryBackup(path); }
-        return new ListingTracker();
+        return new ListingTracker(consumeCost);
     }
 
     private static void TryBackup(string path)
@@ -416,7 +458,7 @@ public sealed class ListingTracker
     }
 
     public const string ListingsHeader =
-        "listing_id,retainer,item_id,item_name,hq,qty,first_seen_utc,first_price,last_price,reprice_count,undercut_count,undercutters,competitors,ended_utc,outcome,sold_total_gil,days_listed,buyer,sale_time_utc,sold_gross_gil,is_mannequin";
+        "listing_id,retainer,item_id,item_name,hq,qty,first_seen_utc,first_price,last_price,reprice_count,undercut_count,undercutters,competitors,ended_utc,outcome,sold_total_gil,days_listed,buyer,sale_time_utc,sold_gross_gil,is_mannequin,cost,profit";
 
     public string ListingsCsv()
     {
@@ -451,7 +493,9 @@ public sealed class ListingTracker
                 Csv(r.BuyerName ?? string.Empty),
                 (r.SaleTimeUtc ?? r.SoldRecordedUtc) is { } soldAt ? Iso(soldAt) : string.Empty,
                 r.SoldGrossGil?.ToString(inv) ?? string.Empty,
-                r.IsMannequin?.ToString().ToLowerInvariant() ?? string.Empty));
+                r.IsMannequin?.ToString().ToLowerInvariant() ?? string.Empty,
+                r.ConsumedCost?.ToString(inv) ?? string.Empty,
+                r.RealizedProfit?.ToString(inv) ?? string.Empty));
         }
         return sb.ToString();
     }

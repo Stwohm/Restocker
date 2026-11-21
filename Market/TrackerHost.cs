@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
+using Restocker.Localization;
 
 namespace Restocker.Market;
 
@@ -15,17 +16,21 @@ public sealed class TrackerHost : IDisposable
     private readonly IChatGui chat;
     private readonly IPluginLog log;
     private readonly string dir;
+    private readonly Configuration configuration;
+    private readonly List<ListingRecord> pendingStuckAlerts = new();
     private DateTime nextSaveUtc = DateTime.MinValue;
 
     public ListingTracker Tracker { get; }
 
-    public TrackerHost(IFramework framework, IChatGui chat, IDataManager data, IPluginLog log, string dir)
+    public TrackerHost(IFramework framework, IChatGui chat, IDataManager data, IPluginLog log, string dir,
+        Configuration configuration, SaleCostConsumer consumeCost)
     {
         this.framework = framework;
         this.chat = chat;
         this.log = log;
         this.dir = dir;
-        Tracker = ListingTracker.Load(System.IO.Path.Combine(dir, "listings.json"));
+        this.configuration = configuration;
+        Tracker = ListingTracker.Load(System.IO.Path.Combine(dir, "listings.json"), consumeCost);
         framework.Update += OnUpdate;
         ChatHook.Subscribe(chat, data, OnGameSaleMessage, OnAllaganSaleMessage);
     }
@@ -39,11 +44,31 @@ public sealed class TrackerHost : IDisposable
 
     private void OnUpdate(IFramework _)
     {
-        if (!Tracker.Dirty) return;
         var now = DateTime.UtcNow;
         if (now < nextSaveUtc) return;
         nextSaveUtc = now + TimeSpan.FromSeconds(5);
-        if (!Tracker.Save(dir)) log.Warning("[Restocker] could not write listings.json / csv");
+        var contentId = Plugin.PlayerState.ContentId;
+        if (contentId != 0)
+        {
+            var prefix = $"{contentId:X}.";
+            foreach (var listing in Tracker.Records)
+                if (listing.RetainerKey.StartsWith(prefix, StringComparison.Ordinal)
+                    && Tracker.TryMarkStuckNotified(listing, now, configuration.StuckListingDays))
+                    pendingStuckAlerts.Add(listing);
+        }
+
+        if (Tracker.Dirty && !Tracker.Save(dir))
+        {
+            log.Warning("[Restocker] could not write listings.json / csv");
+            return;
+        }
+
+        // Fork: persist each notification flag before printing so a reload cannot repeat the alert.
+        foreach (var listing in pendingStuckAlerts)
+            if (ListingTracker.IsStuck(listing, now, configuration.StuckListingDays))
+                Plugin.ChatPrint(string.Format(Strings.StuckAlert, listing.ItemName + (listing.IsHq ? " (HQ)" : ""),
+                    listing.RetainerName, (now - listing.FirstSeenUtc).TotalDays));
+        pendingStuckAlerts.Clear();
     }
 
     /// <summary>Game RetainerSale message: item/quality from the payload, net gil from the text.</summary>

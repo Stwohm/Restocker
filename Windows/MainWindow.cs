@@ -228,6 +228,14 @@ public sealed class MainWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var stuckDays = configuration.StuckListingDays;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputInt(Strings.StuckSetting, ref stuckDays))
+        {
+            configuration.StuckListingDays = Math.Max(1, stuckDays);
+            configuration.Save();
+        }
+
         var interval = configuration.AutoCycleIntervalMinutes;
         ImGui.SetNextItemWidth(120);
         if (ImGui.InputInt("Auto cycle interval (minutes)", ref interval))

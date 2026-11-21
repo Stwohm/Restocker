@@ -52,6 +52,28 @@ public sealed class LowStockService : IDisposable
         return tracker.ActiveFor(itemId, hq).Where(r => keys.Contains(r.RetainerKey)).Sum(r => r.Quantity);
     }
 
+    // Fork: match the scope of recorded sales using stock across all tracked characters.
+    public Dictionary<(uint ItemId, bool IsHq), (long Listed, long Available)> GetTrackedStock()
+    {
+        var stock = new Dictionary<(uint, bool), (long Listed, long Available)>();
+        foreach (var listing in tracker.Records.Where(r => r.Outcome == ListingTracker.Active && r.MissingSinceUtc == null))
+        {
+            var key = (listing.ItemId, listing.IsHq);
+            var count = stock.GetValueOrDefault(key);
+            stock[key] = (count.Listed + listing.Quantity, count.Available);
+        }
+
+        var inventory = configuration.Snapshots.Values.SelectMany(s => s.Inventory)
+            .Concat(configuration.Characters.Values.SelectMany(c => c.Bag.Concat(c.Saddlebag).Concat(c.PremiumSaddlebag)));
+        foreach (var item in inventory.Where(i => i.IsListable))
+        {
+            var key = (item.ItemId, item.IsHQ);
+            var count = stock.GetValueOrDefault(key);
+            stock[key] = (count.Listed, count.Available + item.Quantity);
+        }
+        return stock;
+    }
+
     public List<RestockSource> Sources(uint itemId, bool hq)
     {
         var list = new List<RestockSource>();
