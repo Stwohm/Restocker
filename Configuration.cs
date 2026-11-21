@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Configuration;
 using Restocker.Data;
 using Restocker.Localization;
+using Restocker.Plan;
 
 namespace Restocker;
 
@@ -36,6 +37,9 @@ public sealed class Configuration : IPluginConfiguration
     public int Language { get; set; } = -1;
 
     // ---------------- Fork (Restocky) ----------------
+
+    public RepriceSortColumn RepriceSortColumn { get; set; } = RepriceSortColumn.Item;
+    public bool RepriceSortDescending { get; set; }
 
     /// <summary>Gil below the lowest competitor for the full / auto cycle.</summary>
     public int UndercutGil { get; set; } = 1;

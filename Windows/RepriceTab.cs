@@ -7,6 +7,7 @@ using Restocker.Data;
 using Restocker.Execution;
 using Restocker.Localization;
 using Restocker.Market;
+using Restocker.Plan;
 
 namespace Restocker.Windows;
 
@@ -26,6 +27,8 @@ public sealed class RepriceTab
     private readonly ConfirmDialog confirmDialog;
     private readonly MarketCache marketCache;
     private readonly AutoCycleController autoCycle;
+    // Fork: share ImGui sort state across retainers and seed a fresh table on plugin reload.
+    private readonly string listingTableId = $"##reprice-listings-{Guid.NewGuid():N}";
     private readonly HashSet<string> reportedBaits = new();
     private string filter = string.Empty;
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
@@ -283,11 +286,10 @@ public sealed class RepriceTab
     private List<(ListingEntry Entry, string ItemName)> FilterListings(RetainerSnapshot snap, Lumina.Excel.ExcelSheet<Item> sheet)
     {
         var rows = new List<(ListingEntry, string)>();
-        foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
+        foreach (var l in snap.Listings)
         {
             var name = sheet.TryGetRow(l.ItemId, out var row) ? row.Name.ExtractText() : $"#{l.ItemId}";
-            if (l.IsHQ) name += " (HQ)";
-            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.Length > 0 && !DisplayListingName(l, name).Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
             rows.Add((l, name));
         }
         return rows;
@@ -443,33 +445,44 @@ public sealed class RepriceTab
     private bool HasPlan(string retainerKey, int slot)
         => pendingPlans.Any(p => p.RetainerKey == retainerKey && p.ListingIndex == slot);
 
+    // Fork: quality is displayed and searchable alongside the base item name.
+    private static string DisplayListingName(ListingEntry listing, string name) => listing.IsHQ ? name + " (HQ)" : name;
+
     private void DrawRetainerListings(RetainerSnapshot snap, List<(ListingEntry Entry, string ItemName)> rows)
     {
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
-            ImGuiTableFlags.NoSavedSettings;
+            ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.Sortable;
 
         // Fork: #, Item, Qty, Current, undercutters icon, New, Profit, Hold, fill, +Add = 10
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 10, flags)) return;
+        if (!ImGui.BeginTable(listingTableId, 10, flags)) return;
 
-        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
-        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f);
-        ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
-        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
-        ImGui.TableSetupColumn("##cheaper", ImGuiTableColumnFlags.WidthFixed, 24);
-        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
-        ImGui.TableSetupColumn(Strings.ColProfit, ImGuiTableColumnFlags.WidthFixed, 75);
-        ImGui.TableSetupColumn(Strings.ColHold, ImGuiTableColumnFlags.WidthFixed, 55);
-        ImGui.TableSetupColumn("##fill", ImGuiTableColumnFlags.WidthFixed, 70);
-        ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
+        SetupSortableColumn("#", ImGuiTableColumnFlags.WidthFixed, 30, RepriceSortColumn.Slot);
+        SetupSortableColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f, RepriceSortColumn.Item);
+        SetupSortableColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60, RepriceSortColumn.Quantity);
+        SetupSortableColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f, RepriceSortColumn.CurrentPrice);
+        const ImGuiTableColumnFlags fixedNoSort = ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort;
+        ImGui.TableSetupColumn("##cheaper", fixedNoSort, 24);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.NoSort, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColProfit, fixedNoSort, 75);
+        ImGui.TableSetupColumn(Strings.ColHold, fixedNoSort, 55);
+        ImGui.TableSetupColumn("##fill", fixedNoSort, 70);
+        ImGui.TableSetupColumn("##add", fixedNoSort, 60);
         ImGui.TableHeadersRow();
+
+        // Fork: sort the filtered display rows while keeping the original listing entries and slot keys.
+        UpdateListingSort();
+        var sortColumn = configuration.RepriceSortColumn;
+        var descending = configuration.RepriceSortDescending;
+        rows.Sort((left, right) => RepriceSort.Compare(left, right, sortColumn, descending));
 
         var tracker = Plugin.Instance.Tracker.Tracker;
         var now = DateTime.UtcNow;
         var tracked = tracker.Records.Where(r => r.RetainerKey == snap.Key && r.Outcome == ListingTracker.Active)
             .ToLookup(r => (r.Slot, r.ItemId, r.IsHq, r.Quantity));
-        foreach (var (l, name) in rows)
+        foreach (var (l, itemName) in rows)
         {
+            var name = DisplayListingName(l, itemName);
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(l.ListingIndex.ToString());
@@ -496,6 +509,34 @@ public sealed class RepriceTab
         }
 
         ImGui.EndTable();
+    }
+
+    private void SetupSortableColumn(string label, ImGuiTableColumnFlags flags, float width, RepriceSortColumn column)
+    {
+        var savedColumn = configuration.RepriceSortColumn;
+        if (!Enum.IsDefined(savedColumn)) savedColumn = RepriceSortColumn.Item;
+        if (column == savedColumn)
+        {
+            flags |= ImGuiTableColumnFlags.DefaultSort;
+            if (configuration.RepriceSortDescending)
+                flags |= ImGuiTableColumnFlags.PreferSortDescending;
+        }
+        ImGui.TableSetupColumn(label, flags, width, (uint)column);
+    }
+
+    private unsafe void UpdateListingSort()
+    {
+        var specs = ImGui.TableGetSortSpecs();
+        if (specs.Handle == null || !specs.SpecsDirty || specs.SpecsCount == 0) return;
+
+        var column = (RepriceSortColumn)specs.Specs.ColumnUserID;
+        var descending = specs.Specs.SortDirection == ImGuiSortDirection.Descending;
+        specs.SpecsDirty = false;
+        if (column == configuration.RepriceSortColumn && descending == configuration.RepriceSortDescending) return;
+
+        configuration.RepriceSortColumn = column;
+        configuration.RepriceSortDescending = descending;
+        configuration.Save();
     }
 
     // Fork: show listing age and recorded sales together on the item name.
