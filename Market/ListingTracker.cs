@@ -10,6 +10,8 @@ using Restocker.Data;
 
 namespace Restocker.Market;
 
+public enum HistorySaleResult { Duplicate, MatchedListing, HistoryOnly }
+
 /// <summary>Who else sells the same item (retainer name; the game does not send player names).</summary>
 public sealed class CompetitorStat
 {
@@ -305,11 +307,15 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
         => GetSales().Where(r => r.ItemId == itemId && r.IsHq == hq)
             .OrderByDescending(r => r.RecordedSaleUtc);
 
-    public void OnHistorySale(string retainerKey, string retainerName, RetainerHistorySale sale,
-        Func<uint, string> itemName)
+    public HistorySaleResult OnHistorySale(string retainerKey, string retainerName, RetainerHistorySale sale,
+        Func<uint, string> itemName, Action<string>? log = null)
     {
         var key = FormattableString.Invariant($"{retainerKey}|{sale.ItemId}|{sale.IsHq}|{sale.Quantity}|{sale.NetGil}|{sale.UnixSeconds}|{sale.Buyer}");
-        if (Records.Any(r => r.HistoryKey == key)) return;
+        if (Records.Any(r => r.HistoryKey == key))
+        {
+            log?.Invoke($"[Restocky] history: OnHistorySale skipped duplicate item={sale.ItemId} qty={sale.Quantity} unix={sale.UnixSeconds}");
+            return HistorySaleResult.Duplicate;
+        }
         var time = DateTimeOffset.FromUnixTimeSeconds(sale.UnixSeconds).UtcDateTime;
         // Packet times have one-second precision. Never consume a newer relisting, or a
         // listing still observed live after the sale, just because the price looks right.
@@ -369,6 +375,7 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
         rec.BuyerName = sale.Buyer;
         rec.IsMannequin = sale.IsMannequin;
         if (newRecord) Records.Add(rec);
+        return newRecord ? HistorySaleResult.HistoryOnly : HistorySaleResult.MatchedListing;
     }
 
     private static ListingRecord? BestWithinTolerance(IEnumerable<ListingRecord> candidates, long netGil)

@@ -13,23 +13,31 @@ public sealed record RetainerHistorySale(uint ItemId, uint NetGil, uint UnixSeco
 {
     public const int RecordSize = 52;
     public const int MaxRecords = 20;
+    private const int EntriesOffset = 8;
+    public const int PacketSize = EntriesOffset + MaxRecords * RecordSize;
 
-    public static List<RetainerHistorySale> Parse(ReadOnlySpan<byte> packet)
+    public static List<RetainerHistorySale> Parse(ReadOnlySpan<byte> packet, Action<string>? log = null)
     {
         var sales = new List<RetainerHistorySale>();
         for (var i = 0; i < MaxRecords; i++)
         {
-            var offset = 8 + i * RecordSize;
+            var offset = EntriesOffset + i * RecordSize;
             if (offset + RecordSize > packet.Length) break;
             var row = packet.Slice(offset, RecordSize);
             var item = BinaryPrimitives.ReadUInt32LittleEndian(row);
             if (item == 0) break;
-            var quantity = BinaryPrimitives.ReadInt32LittleEndian(row[12..]);
-            if (quantity <= 0) continue;
+            var quantity = BinaryPrimitives.ReadUInt32LittleEndian(row[12..]);
+            if (quantity is 0 or > int.MaxValue)
+            {
+                log?.Invoke($"[Restocky] history: skipped row={i} item={item} invalid quantity={quantity}");
+                continue;
+            }
+            var encodedHq = item is > 1_000_000 and < 2_000_000;
+            if (encodedHq) item -= 1_000_000;
             var name = row.Slice(19, 32);
             var end = name.IndexOf((byte)0);
             sales.Add(new(item, BinaryPrimitives.ReadUInt32LittleEndian(row[4..]),
-                BinaryPrimitives.ReadUInt32LittleEndian(row[8..]), quantity, row[16] != 0,
+                BinaryPrimitives.ReadUInt32LittleEndian(row[8..]), (int)quantity, encodedHq || row[16] != 0,
                 row[18] != 0, Encoding.UTF8.GetString(end < 0 ? name : name[..end])));
         }
         return sales;

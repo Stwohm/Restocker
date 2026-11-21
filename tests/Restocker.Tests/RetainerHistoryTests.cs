@@ -42,6 +42,47 @@ public class RetainerHistoryTests
     }
 
     [Theory]
+    [InlineData(100, 1)]
+    [InlineData(1_000_100, 0)]
+    [InlineData(1_000_100, 1)]
+    public void Both_HQ_encodings_match_the_same_listing_and_deduplicate(int rawId, byte flag)
+    {
+        var packet = new byte[RetainerHistorySale.PacketSize];
+        var row = packet.AsSpan(8);
+        BinaryPrimitives.WriteUInt32LittleEndian(row, (uint)rawId);
+        BinaryPrimitives.WriteUInt32LittleEndian(row[4..], Sale.NetGil);
+        BinaryPrimitives.WriteUInt32LittleEndian(row[8..], Time);
+        BinaryPrimitives.WriteUInt32LittleEndian(row[12..], (uint)Sale.Quantity);
+        row[16] = flag;
+        Encoding.UTF8.GetBytes(Sale.Buyer, row[19..]);
+        var parsed = Assert.Single(RetainerHistorySale.Parse(packet));
+        Assert.Equal(Sale, parsed);
+
+        var tracker = new ListingTracker();
+        var key = RetainerSnapshot.MakeKey(123, 456);
+        tracker.ObserveRetainer(key, "RetainerA", [new(0, 100, true, 2, 100)], _ => "Item", SoldAt.AddHours(-1));
+        Assert.Equal(HistorySaleResult.MatchedListing, tracker.OnHistorySale(key, "RetainerA", parsed, _ => "Item"));
+        string? reason = null;
+        Assert.Equal(HistorySaleResult.Duplicate, tracker.OnHistorySale(key, "RetainerA", Sale, _ => "Item", s => reason = s));
+        Assert.Contains("skipped duplicate", reason);
+        Assert.DoesNotContain(key, reason);
+        Assert.Single(tracker.Records);
+    }
+
+    [Fact]
+    public void Invalid_unsigned_quantity_reports_reason_and_continues_to_next_row()
+    {
+        var packet = new byte[RetainerHistorySale.PacketSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(8), 100);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(8 + 12), uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(8 + 52), 101);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(8 + 52 + 12), 1);
+        string? reason = null;
+        Assert.Equal(101u, Assert.Single(RetainerHistorySale.Parse(packet, s => reason = s)).ItemId);
+        Assert.Contains("invalid quantity=4294967295", reason);
+    }
+
+    [Theory]
     [InlineData("active")]
     [InlineData("gone")]
     [InlineData("allaganmarket")]

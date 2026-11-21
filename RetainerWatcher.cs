@@ -23,6 +23,7 @@ public sealed unsafe class RetainerWatcher : IDisposable
     private readonly IObjectTable objectTable;
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
+    internal RetainerSnapshot? LastSeen { get; private set; }
 
     public RetainerWatcher(
         Configuration configuration,
@@ -69,7 +70,7 @@ public sealed unsafe class RetainerWatcher : IDisposable
         if (retainerManager == null || !retainerManager->IsReady) return;
 
         var active = retainerManager->GetActiveRetainer();
-        if (active == null) return;
+        if (active == null || active->RetainerId == 0) return;
 
         var characterId = playerState.ContentId;
         if (characterId == 0) return;
@@ -85,6 +86,7 @@ public sealed unsafe class RetainerWatcher : IDisposable
             LastRefreshedUtc = DateTime.UtcNow,
         };
         snapshot.Key = RetainerSnapshot.MakeKey(snapshot.CharacterContentId, snapshot.RetainerId);
+        LastSeen = snapshot;
 
         snapshot.Listings = ReadListings(out var marketLoaded);
         snapshot.Inventory = ReadInventory();

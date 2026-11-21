@@ -1744,20 +1744,48 @@ public sealed unsafe class Executor : IDisposable
     private void TryOpenSaleHistory()
     {
         historyRetainerKey = null;
-        if (Mode != ExecutionMode.FullCycle || !configuration.FetchSaleHistory) return;
+        if (Mode != ExecutionMode.FullCycle)
+        {
+            log.Information($"[Restocky] history: TryOpenSaleHistory skipped mode={Mode}");
+            return;
+        }
+        if (!configuration.FetchSaleHistory)
+        {
+            log.Information("[Restocky] history: TryOpenSaleHistory skipped toggle off");
+            return;
+        }
         try
         {
             var capture = Plugin.Instance.SaleHistory;
-            if (!capture.Available) return;
+            if (!capture.Available)
+            {
+                log.Information("[Restocky] history: TryOpenSaleHistory skipped capture unavailable");
+                return;
+            }
             var key = RetainerHistoryCapture.ActiveKey(out var name);
-            if (key == null || name != jobs[jobCursor].RetainerName) return;
+            if (key == null)
+            {
+                log.Information("[Restocky] history: TryOpenSaleHistory skipped key null");
+                return;
+            }
+            var expected = jobs[jobCursor].RetainerName;
+            if (name != expected)
+            {
+                log.Information($"[Restocky] history: TryOpenSaleHistory skipped name mismatch active='{name}' job='{expected}'");
+                return;
+            }
             historyReceipt = capture.Receipt(key);
-            if (!SelectStringHelper.ClickEntry(AddonText.IsSaleHistoryEntry)) return;
+            if (!SelectStringHelper.ClickEntry(AddonText.IsSaleHistoryEntry))
+            {
+                log.Information("[Restocky] history: TryOpenSaleHistory skipped entry not found");
+                return;
+            }
             historyRetainerKey = key;
             historyDeadline = DateTime.UtcNow.AddSeconds(5);
             State = ExecutionState.AwaitingSaleHistory;
+            log.Information($"[Restocky] history: TryOpenSaleHistory clicked retainer='{name}'");
         }
-        catch (Exception ex) { log.Warning(ex, "[Restocky] Skipping sale history request"); }
+        catch (Exception ex) { log.Warning(ex, "[Restocky] history: sale history request failed"); }
     }
 
     private void TickSaleHistory()
@@ -1767,10 +1795,10 @@ public sealed unsafe class Executor : IDisposable
             var arrived = Plugin.Instance.SaleHistory.Receipt(historyRetainerKey!) != historyReceipt;
             var window = AddonHelper.GetVisible("RetainerHistory");
             if (DateTime.UtcNow < historyDeadline && (!arrived || window == null)) return;
-            if (!arrived) log.Debug("[Restocky] Sale history request timed out");
+            log.Information($"[Restocky] history: TickSaleHistory {(arrived ? "arrived" : "timed out")} window={(window == null ? "absent" : "visible")}");
             if (window != null) window->Close(true);
         }
-        catch (Exception ex) { log.Warning(ex, "[Restocky] Skipping sale history wait"); }
+        catch (Exception ex) { log.Warning(ex, "[Restocky] history: sale history wait failed"); }
         State = ExecutionState.DismissingRetainer;
         Throttle();
     }
