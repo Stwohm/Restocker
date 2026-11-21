@@ -317,38 +317,19 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
             return HistorySaleResult.Duplicate;
         }
         var time = DateTimeOffset.FromUnixTimeSeconds(sale.UnixSeconds).UtcDateTime;
-        // Packet times have one-second precision. Never consume a newer relisting, or a
-        // listing still observed live after the sale, just because the price looks right.
-        var candidates = Records.Where(r => r.HistoryKey == null && r.RetainerKey == retainerKey
-            && r.ItemId == sale.ItemId && r.IsHq == sale.IsHq && r.Quantity == sale.Quantity
-            && r.FirstSeenUtc < time.AddSeconds(1));
-        var reported = candidates.Where(r => r.Outcome == Sold && r.SoldRecordedUtc != null);
-        var rec = reported.Where(r => (r.SoldRecordedUtc!.Value - time).Duration() <= DuplicateSaleWindow
-                && Math.Abs(r.SoldTotalGil - sale.NetGil) <= Tolerance(sale.NetGil))
-            .OrderBy(r => Math.Abs(r.SoldTotalGil - sale.NetGil))
-            .ThenBy(r => (r.SoldRecordedUtc!.Value - time).Duration()).FirstOrDefault();
-        // Fork: a game notice may have closed the stack even when its proceeds could not be parsed.
+        var candidates = Records.Where(r => !r.HistoryOnly && r.HistoryKey == null
+            && StackIdentity(r) == (retainerKey, sale.ItemId, sale.IsHq, sale.Quantity));
+        var rec = FindReported(candidates, sale.NetGil, time);
+        // The game notice can omit proceeds. Keep its narrower, unambiguous price fallback.
         if (rec == null)
         {
-            var unpriced = reported.Where(r => r.SoldSource == GameSaleSource && r.SoldTotalGil == 0
-                && (r.SoldRecordedUtc!.Value - time).Duration() <= DuplicateSaleWindow
+            var unpriced = candidates.Where(r => r.Outcome == Sold && r.SoldSource == GameSaleSource
+                && r.SoldTotalGil == 0 && r.SoldRecordedUtc is { } receipt
+                && (receipt - time).Duration() <= DuplicateSaleWindow && r.FirstSeenUtc < time.AddSeconds(1)
                 && Difference(r, sale.NetGil) <= Tolerance(sale.NetGil)).Take(2).ToList();
             if (unpriced.Count == 1) rec = unpriced[0];
         }
-        var listings = candidates.Where(r => r.LastSeenUtc < time.AddSeconds(1)
-                && (r.Outcome == Active || (r.Outcome == Gone && r.EndedUtc >= time)))
-            .OrderByDescending(r => r.Outcome == Gone).ThenByDescending(r => r.LastSeenUtc).ToList();
-        // A notice delivered on login may be days newer than the transaction. Reconcile
-        // an exact, unambiguous amount inside its listing lifetime if no live/gone stack fits.
-        if (rec == null && listings.Count == 0)
-        {
-            var delayed = reported.Where(r => r.SoldTotalGil == sale.NetGil
-                && r.LastSeenUtc < time.AddSeconds(1) && r.EndedUtc >= time).Take(2).ToList();
-            if (delayed.Count == 1) rec = delayed[0];
-        }
-        rec ??= BestWithinTolerance(listings, sale.NetGil);
-        // A single eligible stack can have changed price since our last observation.
-        if (rec == null && listings.Count == 1) rec = listings[0];
+        rec ??= FindListing(candidates, time, includeActive: true);
         var newRecord = rec == null;
         if (rec == null)
         {
@@ -360,22 +341,68 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
                 FirstSeenUtc = time, LastSeenUtc = time,
             };
         }
-        else if (rec.SoldGrossGil == null && NetFromGross(rec.LastPrice * rec.Quantity) == sale.NetGil)
-        {
-            rec.SoldGrossGil = rec.LastPrice * rec.Quantity;
-        }
+        ApplyHistory(rec, key, time, sale.NetGil, sale.Buyer, sale.IsMannequin);
+        if (newRecord) Records.Add(rec);
+        return newRecord ? HistorySaleResult.HistoryOnly : HistorySaleResult.MatchedListing;
+    }
 
-        // Keep the original chat source and receipt time for paired-notice deduplication.
+    private static (string RetainerKey, uint ItemId, bool IsHq, int Quantity) StackIdentity(ListingRecord r)
+        => (r.RetainerKey, r.ItemId, r.IsHq, r.Quantity);
+
+    private static ListingRecord? FindReported(IEnumerable<ListingRecord> candidates, long netGil, DateTime time)
+        => candidates.Where(r => r.Outcome == Sold && Math.Abs((decimal)r.SoldTotalGil - netGil) <= Tolerance(netGil))
+            .Select(r => (Record: r, Delay: (r.SoldRecordedUtc ?? r.EndedUtc) - time))
+            .Where(x => x.Delay >= TimeSpan.FromMinutes(-5) && x.Delay <= TimeSpan.FromHours(72))
+            .OrderBy(x => x.Delay!.Value.Duration()).Select(x => x.Record).FirstOrDefault();
+
+    private static ListingRecord? FindListing(IEnumerable<ListingRecord> candidates, DateTime time, bool includeActive)
+        => candidates.Where(r => (r.Outcome == Gone || (includeActive && r.Outcome == Active))
+                && r.LastSeenUtc <= time.AddSeconds(1) && (r.EndedUtc == null || r.EndedUtc >= time))
+            .OrderByDescending(r => r.Outcome == Gone).ThenBy(r => r.EndedUtc ?? DateTime.MaxValue)
+            .ThenBy(r => r.FirstSeenUtc).ThenBy(r => r.Id, StringComparer.Ordinal).FirstOrDefault();
+
+    private void ApplyHistory(ListingRecord rec, string key, DateTime time, long netGil, string? buyer, bool? mannequin)
+    {
+        if (!rec.HistoryOnly && rec.SoldGrossGil == null && NetFromGross(rec.LastPrice * rec.Quantity) == netGil)
+            rec.SoldGrossGil = rec.LastPrice * rec.Quantity;
+
+        // Preserve the original notice source and receipt time for paired-notice deduplication.
         var source = rec.Outcome == Sold ? rec.SoldSource : "history";
-        var receipt = rec.SoldRecordedUtc ?? time;
-        MarkSold(rec, sale.NetGil, receipt, keepEndedUtc: false, source, saleUtc: time);
+        var receipt = rec.SoldRecordedUtc ?? (rec.Outcome == Sold ? rec.EndedUtc : null) ?? time;
+        MarkSold(rec, netGil, receipt, keepEndedUtc: false, source, saleUtc: time);
         rec.EndedUtc = time;
         rec.HistoryKey = key;
         rec.SaleTimeUtc = time;
-        rec.BuyerName = sale.Buyer;
-        rec.IsMannequin = sale.IsMannequin;
-        if (newRecord) Records.Add(rec);
-        return newRecord ? HistorySaleResult.HistoryOnly : HistorySaleResult.MatchedListing;
+        rec.BuyerName = buyer;
+        rec.IsMannequin = mannequin;
+    }
+
+    public void ReconcileHistory(Action<string>? log = null)
+    {
+        var history = Records.Where(r => r.HistoryOnly && r.HistoryKey != null && r.SaleTimeUtc != null)
+            .OrderBy(r => r.SaleTimeUtc).ToList();
+        if (history.Count == 0) return;
+        var targets = Records.Where(r => !r.HistoryOnly && r.HistoryKey == null &&
+                (r.Outcome == Gone || (r.Outcome == Sold && r.SoldSource == AllaganMarketSaleSource)))
+            .ToLookup(StackIdentity);
+        foreach (var row in history)
+        {
+            var time = row.SaleTimeUtc!.Value;
+            var candidates = targets[StackIdentity(row)].Where(r => r.HistoryKey == null);
+            var target = FindReported(candidates.Where(r => r.SoldSource == AllaganMarketSaleSource), row.SoldTotalGil, time)
+                ?? FindListing(candidates, time, includeActive: false);
+            if (target == null) continue;
+
+            var kind = target.Outcome == Sold ? "allagan" : "gone";
+            if (target.ConsumedCost == null && row.ConsumedCost != null)
+            {
+                target.ConsumedCost = row.ConsumedCost;
+                target.UnknownCostUnits = row.UnknownCostUnits;
+            }
+            ApplyHistory(target, row.HistoryKey!, time, row.SoldTotalGil, row.BuyerName, row.IsMannequin);
+            Records.Remove(row);
+            log?.Invoke($"[Restocky] history: reconcile merged {target.ItemName} into {kind} record");
+        }
     }
 
     private static ListingRecord? BestWithinTolerance(IEnumerable<ListingRecord> candidates, long netGil)
@@ -399,7 +426,7 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
         DateTime? saleUtc = null)
     {
         // Fork: history enrichment updates proceeds and timing on the same sold record.
-        if (rec.Outcome != Sold && consumeCost != null)
+        if (rec.Outcome != Sold && rec.ConsumedCost == null && consumeCost != null)
             (rec.ConsumedCost, rec.UnknownCostUnits) = consumeCost(rec.ItemId, rec.IsHq, rec.Quantity, saleUtc ?? nowUtc);
 
         rec.Outcome = Sold;
@@ -420,18 +447,17 @@ public sealed class ListingTracker(SaleCostConsumer? consumeCost = null)
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    public static ListingTracker Load(string path, SaleCostConsumer? consumeCost = null)
+    public static ListingTracker Load(string path, SaleCostConsumer? consumeCost = null, Action<string>? log = null)
     {
+        var tracker = new ListingTracker(consumeCost);
         try
         {
             if (File.Exists(path))
-            {
-                var recs = JsonSerializer.Deserialize<List<ListingRecord>>(File.ReadAllText(path));
-                if (recs != null) return new ListingTracker(consumeCost) { Records = recs };
-            }
+                tracker.Records = JsonSerializer.Deserialize<List<ListingRecord>>(File.ReadAllText(path)) ?? new();
         }
         catch { /* corrupt file: start fresh, keep the old one aside */ TryBackup(path); }
-        return new ListingTracker(consumeCost);
+        tracker.ReconcileHistory(log);
+        return tracker;
     }
 
     private static void TryBackup(string path)

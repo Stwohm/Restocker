@@ -38,7 +38,7 @@ public static class Strings
     public static string LanguageNameKorean => "한국어";
 
     // Fork: sale history capture and display.
-    public static string FetchSaleHistory => T("Read sale history during full and auto cycles", "フル・自動巡回で販売履歴を取得", "Verkaufsverlauf bei vollständigen und automatischen Durchläufen abrufen", "Lire l’historique des ventes lors des cycles complets et automatiques", "完整和自动循环时读取出售记录", "전체 및 자동 순회 시 판매 내역 조회");
+    public static string FetchSaleHistory => T("Read sale history when visiting retainers", "リテイナー巡回時に販売履歴を取得", "Verkaufsverlauf bei Gehilfenbesuchen abrufen", "Lire l’historique des ventes lors des visites aux servants", "访问雇员时读取出售记录", "집사 방문 시 판매 내역 조회");
     public static string Buyer => T("Buyer", "購入者", "Käufer", "Acheteur", "购买人", "구매자");
     public static string SaleTime => T("Sale time", "取引日時", "Verkaufszeit", "Date de vente", "交易时间", "판매 일시");
 

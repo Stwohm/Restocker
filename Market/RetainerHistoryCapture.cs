@@ -105,6 +105,7 @@ internal sealed unsafe class RetainerHistoryCapture : IDisposable
                         case HistorySaleResult.HistoryOnly: historyOnly++; break;
                     }
                 }
+                tracker.ReconcileHistory(message => Plugin.Log.Information(message));
                 receipts[key] = Receipt(key) + 1;
                 Plugin.Log.Information($"[Restocky] history: drain retainer='{name}' source={source} new={matched + historyOnly} duplicate={duplicates} matched-listing={matched} history-only={historyOnly}");
             }

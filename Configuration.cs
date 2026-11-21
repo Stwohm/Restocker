@@ -56,7 +56,7 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Auto cycle interval in minutes.</summary>
     public int AutoCycleIntervalMinutes { get; set; } = 10;
 
-    // Fork: request the retainer's sale history once per full/auto visit.
+    // Fork: request each visited retainer's sale history once per executor run.
     public bool FetchSaleHistory { get; set; } = true;
 
     /// <summary>Random +/- jitter added to each auto cycle interval, in seconds.</summary>

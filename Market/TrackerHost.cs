@@ -30,7 +30,7 @@ public sealed class TrackerHost : IDisposable
         this.log = log;
         this.dir = dir;
         this.configuration = configuration;
-        Tracker = ListingTracker.Load(System.IO.Path.Combine(dir, "listings.json"), consumeCost);
+        Tracker = ListingTracker.Load(System.IO.Path.Combine(dir, "listings.json"), consumeCost, message => log.Information(message));
         framework.Update += OnUpdate;
         ChatHook.Subscribe(chat, data, OnGameSaleMessage, OnAllaganSaleMessage);
     }

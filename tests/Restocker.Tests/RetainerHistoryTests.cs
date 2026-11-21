@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.IO;
+using System.Collections.Generic;
+using Restocker.Execution;
 using System.Linq;
 using System.Text;
 using Restocker.Common;
@@ -161,6 +163,140 @@ public class RetainerHistoryTests
             Assert.Contains(csv, line => line.EndsWith(",BuyerA,2023-11-14T22:13:20Z,,true,,"));
         }
         finally { dir.Delete(true); }
+    }
+
+    [Theory]
+    [InlineData(14, -1, true)]
+    [InlineData(120, 1, true)]
+    [InlineData(4800, 0, false)]
+    [InlineData(-6, 0, false)]
+    [InlineData(-5, 0, true)]
+    [InlineData(4320, 0, true)]
+    public void Notice_window_allows_delayed_receipts_and_rounding(int minutes, int rounding, bool matches)
+    {
+        var tracker = new ListingTracker();
+        tracker.ObserveRetainer("A", "RetainerA", [new(0, 100, true, 2, 100)], _ => "Item", SoldAt.AddDays(-1));
+        var notice = tracker.OnAllaganSale([100], 2, 190 + rounding, SoldAt.AddMinutes(minutes));
+        Assert.NotNull(notice);
+        var result = tracker.OnHistorySale("A", "RetainerA", Sale, _ => "Item");
+        Assert.Equal(matches ? HistorySaleResult.MatchedListing : HistorySaleResult.HistoryOnly, result);
+        Assert.Equal(matches, notice.HistoryKey != null);
+        Assert.Equal(matches ? 1 : 2, tracker.Records.Count);
+    }
+
+    [Fact]
+    public void Closest_notice_wins_even_when_another_has_the_exact_amount()
+    {
+        var tracker = new ListingTracker();
+        tracker.ObserveRetainer("A", "RetainerA", [new(0, 100, true, 2, 100), new(1, 100, true, 2, 100)],
+            _ => "Item", SoldAt.AddHours(-1));
+        var near = tracker.OnAllaganSale([100], 2, 189, SoldAt.AddMinutes(14));
+        var far = tracker.OnAllaganSale([100], 2, 190, SoldAt.AddHours(2));
+        tracker.OnHistorySale("A", "RetainerA", Sale, _ => "Item");
+        Assert.Equal(SoldAt, near!.SaleTimeUtc);
+        Assert.Null(far!.HistoryKey);
+    }
+
+    [Fact]
+    public void Identical_gone_stacks_match_by_end_then_first_seen_once_each()
+    {
+        var tracker = new ListingTracker();
+        // All three were last seen before the first sale. Slots 1 and 2 disappeared
+        // together, and slot 2 was first listed earlier. Slot 0 disappeared last.
+        for (var slot = 0; slot < 3; slot++)
+        {
+            tracker.Records.Add(new ListingRecord
+            {
+                RetainerKey = "A", ItemId = 100, IsHq = true, Quantity = 2, LastPrice = 150, Slot = slot,
+                Outcome = ListingTracker.Gone, FirstSeenUtc = SoldAt.AddDays(slot == 2 ? -2 : -1),
+                LastSeenUtc = SoldAt.AddHours(-1), EndedUtc = SoldAt.AddHours(slot == 0 ? 7 : 6),
+            });
+        }
+        int[] slots = [2, 1, 0];
+        uint[] offsets = [0, 3600, 7200];
+        for (var i = 0; i < slots.Length; i++)
+        {
+            var sale = Sale with { UnixSeconds = Time + offsets[i] };
+            Assert.Equal(HistorySaleResult.MatchedListing, tracker.OnHistorySale("A", "RetainerA", sale, _ => "Item"));
+            Assert.Equal(SoldAt.AddSeconds(offsets[i]), tracker.Records.Single(r => r.Slot == slots[i]).SaleTimeUtc);
+        }
+        Assert.Equal(3, tracker.GetSales().Count());
+        Assert.DoesNotContain(tracker.Records, r => r.HistoryOnly);
+    }
+
+    [Fact]
+    public void Active_stack_verified_after_sale_stays_open()
+    {
+        var tracker = new ListingTracker();
+        LiveListing[] stack = [new(0, 100, true, 2, 100)];
+        tracker.ObserveRetainer("A", "RetainerA", stack, _ => "Item", SoldAt.AddDays(-1));
+        tracker.ObserveRetainer("A", "RetainerA", stack, _ => "Item", SoldAt.AddSeconds(2));
+        Assert.Equal(HistorySaleResult.HistoryOnly, tracker.OnHistorySale("A", "RetainerA", Sale, _ => "Item"));
+        Assert.Single(tracker.ActiveFor(100, true));
+    }
+
+    [Theory]
+    [InlineData("gone", false, false, 1)]
+    [InlineData("gone", true, false, 0)]
+    [InlineData("allagan", true, false, 0)]
+    [InlineData("allagan", true, true, 0)]
+    public void Load_reconciles_once_and_preserves_cost(string kind, bool historyHasCost, bool targetHasCost, int expectedCalls)
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var tracker = new ListingTracker();
+            tracker.OnHistorySale("A", "RetainerA", Sale, _ => "Item");
+            var history = Assert.Single(tracker.Records);
+            if (historyHasCost) (history.ConsumedCost, history.UnknownCostUnits) = (12m, 0);
+
+            tracker.ObserveRetainer("A", "RetainerA", [new(0, 100, true, 2, 100)], _ => "Item", SoldAt.AddHours(-1));
+            var target = Assert.Single(tracker.ActiveFor(100, true));
+            if (kind == "allagan")
+                tracker.OnAllaganSale([100], 2, 189, SoldAt.AddHours(2));
+            else
+                tracker.ObserveRetainer("A", "RetainerA", [], _ => "Item", SoldAt.AddHours(2), true);
+            if (targetHasCost) (target.ConsumedCost, target.UnknownCostUnits) = (25m, 1);
+            Assert.True(tracker.Save(dir.FullName));
+
+            var calls = 0;
+            var messages = new List<string>();
+            tracker = ListingTracker.Load(Path.Combine(dir.FullName, "listings.json"), (_, _, _, time) =>
+            {
+                Assert.Equal(SoldAt, time);
+                calls++;
+                return (8m, 2);
+            }, messages.Add);
+            var merged = Assert.Single(tracker.Records);
+            Assert.Equal(target.Id, merged.Id);
+            Assert.Equal(ListingTracker.Sold, merged.Outcome);
+            Assert.False(merged.HistoryOnly);
+            Assert.Equal(history.HistoryKey, merged.HistoryKey);
+            Assert.Equal(Sale.Buyer, merged.BuyerName);
+            Assert.Equal(SoldAt, merged.SaleTimeUtc);
+            Assert.Equal(190, merged.SoldTotalGil);
+            Assert.Equal(targetHasCost ? 25m : historyHasCost ? 12m : 8m, merged.ConsumedCost);
+            Assert.Equal(targetHasCost ? 1 : historyHasCost ? 0 : 2, merged.UnknownCostUnits);
+            Assert.True(tracker.Dirty);
+            Assert.True(tracker.Save(dir.FullName));
+            tracker.ReconcileHistory(messages.Add);
+            Assert.Equal(HistorySaleResult.Duplicate, tracker.OnHistorySale("A", "RetainerA", Sale, _ => "Item"));
+            Assert.False(tracker.Dirty);
+            Assert.Equal(expectedCalls, calls);
+            Assert.Equal($"[Restocky] history: reconcile merged Item into {kind} record", Assert.Single(messages));
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Theory]
+    [InlineData(ExecutionMode.ApplyActions)]
+    [InlineData(ExecutionMode.RefreshAll)]
+    [InlineData(ExecutionMode.FullCycle)]
+    public void History_request_requires_enabled_toggle_and_first_visit(ExecutionMode mode)
+    {
+        Assert.Null(SaleHistoryPolicy.SkipReason(mode, true, false));
+        Assert.Equal("toggle off", SaleHistoryPolicy.SkipReason(mode, false, false));
+        Assert.Equal("already requested this run", SaleHistoryPolicy.SkipReason(mode, true, true));
     }
 
     [Theory]

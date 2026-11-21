@@ -47,6 +47,7 @@ public sealed unsafe class Executor : IDisposable
 
     private readonly List<RetainerVisitJob> jobs = new();
     private int jobCursor;
+    private readonly HashSet<string> historyRequested = new();
     private string? historyRetainerKey;
     private long historyReceipt;
     private DateTime historyDeadline;
@@ -395,6 +396,7 @@ public sealed unsafe class Executor : IDisposable
     private void Begin(ExecutionMode mode)
     {
         Mode = mode;
+        historyRequested.Clear();
         jobCursor = 0;
         CompletedJobs = 0;
         CompletedActions = 0;
@@ -1744,14 +1746,11 @@ public sealed unsafe class Executor : IDisposable
     private void TryOpenSaleHistory()
     {
         historyRetainerKey = null;
-        if (Mode != ExecutionMode.FullCycle)
+        var expected = jobs[jobCursor].RetainerName;
+        var reason = SaleHistoryPolicy.SkipReason(Mode, configuration.FetchSaleHistory, historyRequested.Contains(expected));
+        if (reason != null)
         {
-            log.Information($"[Restocky] history: TryOpenSaleHistory skipped mode={Mode}");
-            return;
-        }
-        if (!configuration.FetchSaleHistory)
-        {
-            log.Information("[Restocky] history: TryOpenSaleHistory skipped toggle off");
+            log.Information($"[Restocky] history: TryOpenSaleHistory skipped {reason}");
             return;
         }
         try
@@ -1768,7 +1767,6 @@ public sealed unsafe class Executor : IDisposable
                 log.Information("[Restocky] history: TryOpenSaleHistory skipped key null");
                 return;
             }
-            var expected = jobs[jobCursor].RetainerName;
             if (name != expected)
             {
                 log.Information($"[Restocky] history: TryOpenSaleHistory skipped name mismatch active='{name}' job='{expected}'");
@@ -1780,6 +1778,7 @@ public sealed unsafe class Executor : IDisposable
                 log.Information("[Restocky] history: TryOpenSaleHistory skipped entry not found");
                 return;
             }
+            historyRequested.Add(name);
             historyRetainerKey = key;
             historyDeadline = DateTime.UtcNow.AddSeconds(5);
             State = ExecutionState.AwaitingSaleHistory;
