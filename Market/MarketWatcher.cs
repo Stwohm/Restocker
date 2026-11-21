@@ -18,6 +18,7 @@ namespace Restocker.Market;
 public sealed unsafe class MarketWatcher : IDisposable
 {
     private readonly IMarketBoard marketBoard;
+    private readonly IObjectTable objectTable;
     private readonly IPluginLog log;
     public MarketCache Cache { get; } = new();
 
@@ -51,9 +52,10 @@ public sealed unsafe class MarketWatcher : IDisposable
         expectedItemId = null;
     }
 
-    public MarketWatcher(IMarketBoard marketBoard, IPluginLog log)
+    public MarketWatcher(IMarketBoard marketBoard, IObjectTable objectTable, IPluginLog log)
     {
         this.marketBoard = marketBoard;
+        this.objectTable = objectTable;
         this.log = log;
         marketBoard.OfferingsReceived += OnOfferingsReceived;
     }
@@ -70,20 +72,28 @@ public sealed unsafe class MarketWatcher : IDisposable
             if (offerings.RequestId == lastRequestId) return;
             lastRequestId = offerings.RequestId;
 
+            var isEmpty = offerings.ItemListings.Count == 0;
+            var itemId = isEmpty ? expectedItemId.GetValueOrDefault() : offerings.ItemListings[0].ItemId;
+            var player = objectTable.LocalPlayer;
+            if (!MarketWorldGate.Accept(player?.CurrentWorld.RowId ?? 0, player?.HomeWorld.RowId ?? 0))
+            {
+                log.Information($"[Restocker] OfferingsReceived item={itemId} ignored: not on home world");
+                return;
+            }
+
             // Fork: an empty board for the item we are fetching means "no competitor".
             // Record that, otherwise the executor waits for its 6s timeout every time.
-            if (offerings.ItemListings.Count == 0)
+            if (isEmpty)
             {
-                if (expectedItemId is { } exp && exp != 0)
+                if (itemId != 0)
                 {
-                    Cache.Replace(exp, false, Array.Empty<MarketOffer>());
-                    Cache.Replace(exp, true, Array.Empty<MarketOffer>());
-                    log.Information($"[Restocker] OfferingsReceived item={exp} empty board -> no competitor");
+                    Cache.Replace(itemId, false, Array.Empty<MarketOffer>());
+                    Cache.Replace(itemId, true, Array.Empty<MarketOffer>());
+                    log.Information($"[Restocker] OfferingsReceived item={itemId} empty board -> no competitor");
                 }
                 return;
             }
 
-            var itemId = offerings.ItemListings[0].ItemId;
             if (itemId == 0) return;
 
             // 自動 fetch 中は「期待アイテム」と一致するものだけ採用する。

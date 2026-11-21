@@ -60,7 +60,7 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
-        MarketWatcher = new MarketWatcher(MarketBoard, Log);
+        MarketWatcher = new MarketWatcher(MarketBoard, ObjectTable, Log);
         Undercuts = new UndercutHistoryHost(MarketWatcher, Configuration, Framework, PlayerState, ObjectTable, Log,
             PluginInterface.GetPluginConfigDirectory());
         Costs = new CostLedgerHost(MarketBoard, Framework, Log, PluginInterface.GetPluginConfigDirectory());
