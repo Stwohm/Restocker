@@ -17,19 +17,21 @@ public sealed class MainWindow : Window, IDisposable
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
     private readonly SalesTab salesTab = new();
+    private readonly CostsTab costsTab;
     private LowStockTab? lowStockTab;
     private readonly MarketCache marketCache;
     private readonly ConfirmDialog confirmDialog = new();
 
-    public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher, AutoCycleController autoCycle)
+    public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher, AutoCycleController autoCycle, CostLedger ledger)
         : base($"{Strings.WindowTitle}##MainWindow",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.configuration = configuration;
         this.executor = executor;
         this.marketCache = marketWatcher.Cache;
-        this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache, autoCycle);
+        this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache, autoCycle, ledger);
         this.listTab = new ListTab(configuration, executor, confirmDialog);
+        this.costsTab = new CostsTab(ledger);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),
@@ -70,6 +72,12 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.BeginTabItem("Sales"))
             {
                 salesTab.Draw();
+                ImGui.EndTabItem();
+            }
+            // Fork: manage purchase and manual cost lots.
+            if (ImGui.BeginTabItem(Strings.TabCosts + "###costs"))
+            {
+                costsTab.Draw();
                 ImGui.EndTabItem();
             }
             if (ImGui.BeginTabItem(Strings.TabSettings))

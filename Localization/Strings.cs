@@ -44,6 +44,28 @@ public static class Strings
     public static string TabList    => T("List items", "新規出品", "Einstellen", "Mettre en vente", "上架", "등록");
     public static string TabSettings => T("Settings", "設定", "Einstellungen", "Paramètres", "设置", "설정");
 
+    // Fork: purchase cost basis.
+    public static string TabCosts => T("Costs", "原価", "Kosten", "Coûts", "成本", "원가");
+    public static string ColProfit => T("Profit", "利益", "Gewinn", "Bénéfice", "利润", "이익");
+    public static string CostAddManual => T("Add manual lot", "原価ロットを手動追加", "Charge manuell hinzufügen", "Ajouter un lot manuel", "手动添加批次", "수동으로 입고분 추가");
+    public static string CostSearchItems => T("Search items", "アイテムを検索", "Artikel suchen", "Rechercher des objets", "搜索物品", "아이템 검색");
+    public static string CostNoMatchingItems => T("No matching items.", "一致するアイテムがありません。", "Keine passenden Artikel.", "Aucun objet correspondant.", "没有匹配的物品。", "일치하는 아이템이 없습니다.");
+    public static string CostNoLots => T("No matching cost lots.", "一致する原価ロットがありません。", "Keine passenden Chargen.", "Aucun lot correspondant.", "没有匹配的成本批次。", "일치하는 원가 입고분이 없습니다.");
+    public static string CostHighQuality => T("HQ", "HQ", "HQ", "HQ", "HQ", "HQ");
+    public static string CostDate => T("Date", "日時", "Datum", "Date", "日期", "날짜");
+    public static string CostQuantity => T("Qty", "個数", "Anz.", "Qté", "数量", "수량");
+    public static string CostRemaining => T("Qty left", "残り個数", "Restmenge", "Qté restante", "剩余数量", "남은 수량");
+    public static string CostUnitCost => T("Unit cost", "単位原価", "Stückkosten", "Coût unitaire", "单位成本", "단위 원가");
+    public static string CostSource => T("Source", "入手元", "Quelle", "Source", "来源", "출처");
+    public static string CostDeleteLot => T("Delete", "削除", "Löschen", "Supprimer", "删除", "삭제");
+    public static string CostWeightedAverage => T("Weighted average", "加重平均原価", "Gewichteter Mittelwert", "Moyenne pondérée", "加权平均成本", "가중 평균 원가");
+    public static string CostPriceAfterTax => T("Price after {0:P0} tax  {1:N2}", "{0:P0}の税引き後価格  {1:N2}", "Preis nach {0:P0} Steuer  {1:N2}", "Prix après {0:P0} de taxe  {1:N2}", "扣除 {0:P0} 税费后的价格  {1:N2}", "{0:P0} 세금 공제 후 가격  {1:N2}");
+    public static string CostFifoLots => T("FIFO lots", "原価ロット（先入先出）", "Chargen in FIFO-Reihenfolge", "Lots (premier entré, premier sorti)", "先进先出批次", "선입선출 입고분");
+    public static string CostLotDetails => T("{0:yyyy-MM-dd HH:mm}  ·  {1:N0} left  ·  {2:N2} per unit  ·  {3}", "{0:yyyy-MM-dd HH:mm}  ·  残り{1:N0}個  ·  単位原価{2:N2}  ·  {3}", "{0:yyyy-MM-dd HH:mm}  ·  {1:N0} übrig  ·  {2:N2} pro Stück  ·  {3}", "{0:yyyy-MM-dd HH:mm}  ·  {1:N0} restants  ·  {2:N2} par unité  ·  {3}", "{0:yyyy-MM-dd HH:mm}  ·  剩余 {1:N0} 件  ·  单位成本 {2:N2}  ·  {3}", "{0:yyyy-MM-dd HH:mm}  ·  {1:N0}개 남음  ·  단위 원가 {2:N2}  ·  {3}");
+    public static string CostSourceName(string source) => source == Market.CostLedger.MarketSource
+        ? T("Market", "マーケット", "Markt", "Marché", "市场", "장터")
+        : T("Manual", "手動", "Manuell", "Manuel", "手动", "수동");
+
     // Header
     public static string HeaderCachedRetainers => T("Cached:", "キャッシュ:", "Zwischenspeicher:", "Cache :", "缓存:", "캐시:");
     public static string HeaderRetainers => T("retainer(s)", "リテイナー", "Gehilfe(n)", "intendant(s)", "雇员", "리테이너");
