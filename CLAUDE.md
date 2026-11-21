@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-## Fork: Restocky (Stwohm/Restocker, private)
+## Fork: Restocky (Stwohm/Restocky, public)
 
 Personal fork of yagi2/Restocker. InternalName / assembly / command: `Restocky` / `/restocky`.
 Config: `pluginConfigs\Restocky.json`, history: `pluginConfigs\Restocky\price-history.csv`.
-Remotes: `origin` = Stwohm/Restocker, `upstream` = yagi2/Restocker. Namespaces stay `Restocker.*`.
+Remotes: `origin` = Stwohm/Restocky, `upstream` = yagi2/Restocker. Namespaces stay `Restocker.*`.
 
 Fork changes and where they live:
 
@@ -49,7 +49,7 @@ Fork changes and where they live:
   during our cycle and released after. Closed bell is reopened via `Common/BellHelper.cs`
   (EObjName 2000401, same as AR). IPC names checked against AR master 2026-11-20.
 - **Distribution:** `repo.json` (custom repo URL
-  `https://raw.githubusercontent.com/Stwohm/Restocker/main/repo.json`) points at the latest GitHub
+  `https://raw.githubusercontent.com/Stwohm/Restocky/main/repo.json`) points at the latest GitHub
   release's `latest.zip`; bump `AssemblyVersion` there with every release.
 
 Pending in-game verification is tracked in the vault (`🏰 300-Projects/FFXIV/Eklentiler.md` › Restocky).

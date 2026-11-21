@@ -7,13 +7,13 @@
     "Punchline": "Restocker fork: bulk reprice with price guards, sales tracking and an optional bell auto-cycle.",
     "Description": "Personal fork of yagi2/Restocker. Reprice every retainer listing to the live market lowest -N gil with floor / max-drop guards, track each listing until it sells (reprices, competitors, days, gil), one-click full cycle and an optional timed auto-cycle at the summoning bell that waits for AutoRetainer. Timed automation is against the FFXIV ToS; use at your own risk.",
     "ApplicableVersion": "any",
-    "RepoUrl": "https://github.com/Stwohm/Restocker",
+    "RepoUrl": "https://github.com/Stwohm/Restocky",
     "Tags": ["retainer", "market", "marketboard", "reprice"],
     "DalamudApiLevel": 15,
     "LoadPriority": 0,
-    "IconUrl": "https://raw.githubusercontent.com/Stwohm/Restocker/main/images/icon.png",
-    "DownloadLinkInstall": "https://github.com/Stwohm/Restocker/releases/latest/download/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/Stwohm/Restocker/releases/latest/download/latest.zip",
-    "DownloadLinkTesting": "https://github.com/Stwohm/Restocker/releases/latest/download/latest.zip"
+    "IconUrl": "https://raw.githubusercontent.com/Stwohm/Restocky/main/images/icon.png",
+    "DownloadLinkInstall": "https://github.com/Stwohm/Restocky/releases/latest/download/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/Stwohm/Restocky/releases/latest/download/latest.zip",
+    "DownloadLinkTesting": "https://github.com/Stwohm/Restocky/releases/latest/download/latest.zip"
   }
 ]

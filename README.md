@@ -1,132 +1,111 @@
-# Restocky — personal fork of Restocker
+# Restocky
 
-> **Fork notice.** This is a personal fork of [yagi2/Restocker](https://github.com/yagi2/Restocker)
-> (MIT, © yagi2). Plugin name `Restocky`, command `/restocky`. Fork changes: duplicate-listing
-> queue fix, stale-snapshot guard, price guards, `price-history.csv`, one-click full cycle and an
-> optional timed auto-cycle at the bell. Timed automation is against the FFXIV ToS; use at your own risk.
-> The original README follows unchanged.
+<p align="center"><img src="images/icon.png" alt="Restocky icon" width="160"></p>
 
-# Restocker
+A Dalamud plugin for FFXIV that keeps your retainer market listings priced, tracks what sells and
+warns you when stock runs low.
 
-<p align="center"><img src="images/icon.png" alt="Restocker icon" width="160"></p>
+Restocky is a fork of [yagi2/Restocker](https://github.com/yagi2/Restocker) (MIT, © yagi2). The
+upstream plugin is no longer maintained. This fork fixes its known bugs and adds pricing rules, sales
+and cost tracking, and an optional auto cycle at the summoning bell.
 
-A Dalamud plugin for FFXIV that turns every retainer's market board work into a **plan once, apply once** workflow:
-
-- See every listing across every retainer in one aggregated view
-- **Reprice** all listings to the live market lowest (or lowest minus *N* gil) — Restocker drives the in-game market lookup itself, no manual searching
-- **New listings** with automatic stack-splitting (e.g. 990 ÷ 99 → ten stacks) and per-row routing to whichever retainer you choose, including direct-list from your character bag or Chocobo Saddlebag
-- Plan-then-apply UX: every change is staged in a list at the bottom of the tab, you review/delete what you don't want, then a single **Apply** button commits all of them
-- A live progress dialog shows what the executor is doing on each step (selecting retainer, opening sell list, fetching market data, listing, …) so long runs don't look frozen
-- Six-language UI: English / 日本語 / Deutsch / Français / 简体中文 / 한국어
+> **ToS warning.** Timed automatic repricing is against the FFXIV Terms of Service. Use it at your own risk.
 
 ## Install
 
-Add the personal Dalamud index to Dalamud:
+1. In game, type `/xlsettings` and open the **Experimental** tab.
+2. Under **Custom Plugin Repositories**, add this URL, tick **Enabled** and save:
 
-```
-https://raw.githubusercontent.com/yagi2/dalamud-plugins/main/repo.json
-```
+   ```
+   https://raw.githubusercontent.com/Stwohm/Restocky/main/repo.json
+   ```
 
-Then install **Restocker** from the plugin list. After install, type `/restocker` or open the retainer bell — the main window shows up automatically when the bell opens (configurable).
+3. Type `/xlplugins`, search for **Restocky** and install it.
 
-## What you can do with it
+Open the plugin with `/restocky`, or open a summoning bell. The window opens automatically when the
+retainer list appears. You get updates from `/xlplugins` like any other plugin.
 
-### Reprice tab — drop every listing to the lowest
+## Features
 
-For each retainer:
+### Update prices
 
-1. Set the undercut amount in the inline `- N g` input (per-session, default 1).
-2. Click **All items: lowest -N g** *or* **All items: lowest (exact)**.
-3. Restocker walks the listings, for each one opens *Adjust price → Compare prices*, reads the actual market data via Dalamud's `IMarketBoard.OfferingsReceived`, and fills the row's new price.
-4. Skim the table, then either click **+** on rows you want to commit, or **Add all to plan** to queue the whole retainer.
-5. The bottom panel shows queued plans across all retainers (item / target / qty / old → new). Use **x** on a row to drop it, **Clear all** to wipe.
-6. Press **Apply**. Confirmed prices are written via `InventoryManager.SetRetainerMarketPrice` directly — no per-listing dialogs to click through.
+- **Full cycle (once):** visits every retainer, reads live market prices, applies the price rules and
+  updates every listing without asking.
+- **Full cycle (I set prices):** fetches prices and fills the **New** column using the same rules, but
+  applies nothing. Review the rows, then press **Apply**.
+- **Auto cycle every N min:** repeats the full cycle while you stand at the bell. It stops when you
+  move, leave the bell, enter combat, a duty or a cutscene, change zone, get a duty pop, or after
+  3 failed cycles. It is off every time the plugin starts.
+- **AutoRetainer:** the cycle waits while AutoRetainer is busy or a venture is about to return, and
+  pauses AutoRetainer while it runs.
+- **Hold:** tick Hold on an item and automatic cycles never change its price.
 
-Per row you can also type a price manually, or click **fill** to copy that row's new price to every other listing on the same retainer.
+### Price rules
 
-The fetch step:
-- Skips your own retainers' listings when picking the lowest (no self-undercut).
-- Deduplicates per `(item, HQ)` within one run, so a retainer with five stacks of the same item only hits the market board once.
-- Tolerates the occasional listing where the dialog doesn't open, logs a warning, and moves on instead of aborting the whole run.
+- New price = the lowest competitor price minus the undercut (default 1 gil). Your own retainers are
+  ignored. HQ and NQ are priced separately, and only home-world market data is used.
+- Bait listings are skipped and reported in chat. A bait listing is one or two listings that are at
+  least 1.5× cheaper than the next group.
+- **Floor:** a price never goes below the item's floor.
+  - If you know the purchase cost, the floor is the break-even price after sales tax:
+    `cost × (1 + minimum profit %) ÷ (1 − sales tax %)`, rounded up. This uses the next lot to be
+    sold (first in, first out).
+  - A floor you type in **Settings** replaces the break-even floor, even when it is lower. Press
+    **Auto** (or type 0) to return to the break-even floor.
+- **Max drop / max raise:** an automatic cycle does not apply a change bigger than 30% (configurable).
+  The I set prices table marks these rows for review.
+- If every competitor is more expensive than you, the price is raised.
 
-### New listing tab — split, route, plan, apply
+### Low stock
 
-For each retainer / character bag / Chocobo Saddlebag section:
+- Watch an item. When the listed quantity falls to your threshold, Restocky warns you in chat and in
+  the window title.
+- **Restock** takes stock from the retainer that already sells the item, then from your bag, then
+  from your saddlebag, and lists it at the price you choose.
+- **List & price:** if nothing is listed yet, Restocky opens the game's sale window. You set the price
+  there, and Restocky lists the remaining stacks at that price.
 
-- Set **price**, **qty per listing × number of slots**, **target retainer** per row.
-- The **M** button next to qty fills it with `min(MaxStack, owned)`.
-- Click **+ Add** to push a `PendingPlan` onto the queue at the bottom of the tab.
-- Repeat for as many items / target retainers as you want — the same item from your saddlebag can be split between retainer A and retainer B in one Apply run.
-- Press **Apply**. Restocker:
-  - For saddlebag sources, **bulk-pre-stages** the required quantity from saddle to character bag in one phase, lets the server settle, then enters the listing phase.
-  - For each new listing, calls `InventoryManager.MoveToRetainerMarket` to commit a `qty × price` listing in a single API call, then waits for the server to actually land it before moving on.
+### Sales, costs and profit
 
-No retainer↔retainer item moves. No deposit step. The character bag sources its own items and lists them directly under the chosen retainer.
+- Sales are read from each retainer's sale history during a cycle (buyer, time and exact proceeds).
+- Market board purchases are recorded as cost lots automatically. You can also add lots by hand in the
+  **Costs** tab.
+- **Profit** column, realized profit, **Stuck** listings and sales **Velocity** in the Sales tab.
+- A tooltip on each listing shows cheaper sellers and how often each rival undercut you in the last
+  24 h, 3 days and 1 week.
 
-### Progress dialog
+### Records
 
-While the executor is running, an auto-shown floating window surfaces:
+Records are saved in `pluginConfigs\Restocky\`. Open the folder from the **Sales** tab.
 
-- Mode (Refresh all / Apply actions)
-- Current step localised (`Pre-staging saddle items to bag…`, `Waiting for sell dialog…`, etc.)
-- Two progress bars: retainers and individual actions
-- Cancel button
-
-This is the "is it stuck or just thinking" window — phases like saddle pre-staging or per-listing server confirmation can take seconds.
+| File | Contents |
+|---|---|
+| `price-history.csv` | Every price decision: old price, lowest competitor, new price, whether it was applied, and the reason |
+| `listings.csv` / `listings.json` | Each listing from first price to sale: price changes, undercuts, days listed, gil received |
+| `competitors.csv` | Summary per item and rival |
+| `cost-ledger.json` | Cost lots (market board and manual) |
 
 ### Settings
 
-- **Auto-open on bell** — the main window appears whenever `RetainerList` opens, RepeatBuy-style.
-- **Language** — Auto (follow client) or explicit override across the six supported locales.
+Undercut amount, max drop %, max raise %, automatic cost floor, sales tax % (default 5), minimum
+profit % (default 0), per-item floors, sale history fetch, chat channel (default: Retainer Sale
+Notifications), auto-open on bell, and language (English, 日本語, Deutsch, Français, 简体中文, 한국어).
 
-## How market data gets in
+## Build and test
 
-Restocker subscribes to **Dalamud's `IMarketBoard.OfferingsReceived`** event. Every time a market board search lands — whether you ran it from Restocker's reprice flow or browsed the market manually — listings are filtered (skip your own retainers, take the cheapest per HQ/NQ) and stored in an in-memory cache.
-
-The reprice flow drives those searches itself by:
-
-1. Clicking the listing row in `RetainerSellList`,
-2. Picking *Adjust price* in the context menu,
-3. Pressing the *Compare prices* button on the price dialog.
-
-It also resolves which item is actually displayed in the dialog (not what the snapshot says — those can drift if you sort the sell list) by reading the dialog's item name and looking it up in the Lumina `Item` sheet.
-
-## Co-existence with other plugins
-
-- **AutoRetainer** — both plugins drive the retainer summon flow. If both are loaded you get a one-time toast warning; pause one while the other runs. Restocker doesn't itself touch venture / quick exploration.
-- **PriceBuddy / Marketbuddy** — these listen on `OfferingsReceived` too, and most don't conflict; but if PriceBuddy auto-clicks *Compare prices* the moment a `RetainerSell` opens, that's harmless to Restocker since Restocker would have clicked it anyway. Disable their auto-click feature only if you see unwanted churn.
-
-## Build
+Requires the .NET 10 SDK.
 
 ```
 dotnet build -c Release
-```
-
-Output: `bin/Release/Restocker/Restocker.dll` plus `bin/Release/Restocker/latest.zip` (uploaded by the GitHub Actions release workflow).
-
-The `<PlatformTarget>x64</PlatformTarget>` + `<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>` block in `Restocker.csproj` keeps the SDK 15 default `bin/x64/Release/` from breaking Dev Plugin Locations and the GHA workflow.
-
-## Test
-
-```
 dotnet test
 ```
 
-`tests/Restocker.Tests/` is a pure-logic xUnit project — no Dalamud / Lumina references at runtime, so it can be run on plain .NET. Coverage:
+`tests/Restocker.Tests/` is a pure-logic xUnit project and needs no game. Code that touches the game
+(the executor, the windows) is tested in game.
 
-- `Planner` — stack splitting, listing-cap behaviour, qty clamping, free-slot capping, plan / overflow accounting
-- `LowestPriceResolver` — outlier rejection, single / empty input, gap-ratio threshold knobs
-- `AddonText` predicates — six-language pattern matching for the SelectString and ContextMenu entries
-- `RetainerSnapshot.MakeKey` / `CharacterSnapshot.MakeKey`
-
-Game-side wiring (executor state machine, addon callbacks) is verified in-game, not by tests.
-
-## Related projects
-
-- **[GilDelta](https://github.com/yagi2/GilDelta)** — same author's read-only gil tracker. Same SDK / project shape; useful as a reference for plugin scaffolding.
-- **[RepeatBuy](https://github.com/yagi2/RepeatBuy)** — earlier author plugin, smaller surface, also references the bell-aware UI behaviour.
-- **[yagi2/dalamud-plugins](https://github.com/yagi2/dalamud-plugins)** — the personal Dalamud plugin index that hosts Restocker, GilDelta, RepeatBuy.
+A release is made by creating a GitHub release. The workflow builds the plugin and attaches
+`latest.zip`, which `repo.json` points to.
 
 ## License
 
-MIT.
+MIT. The original Restocker is © yagi2.
