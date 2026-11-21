@@ -229,6 +229,29 @@ public sealed class MainWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var autoCostFloor = configuration.AutoCostFloor;
+        if (ImGui.Checkbox(Strings.AutoCostFloorSetting, ref autoCostFloor))
+        {
+            configuration.AutoCostFloor = autoCostFloor;
+            configuration.Save();
+        }
+
+        var saleTax = configuration.SaleTaxPercent;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputDouble(Strings.SaleTaxSetting, ref saleTax, 0.5, 1, "%.2f"))
+        {
+            configuration.SaleTaxPercent = saleTax;
+            configuration.Save();
+        }
+
+        var minProfit = configuration.MinProfitPercent;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputDouble(Strings.MinProfitSetting, ref minProfit, 1, 5, "%.2f"))
+        {
+            configuration.MinProfitPercent = minProfit;
+            configuration.Save();
+        }
+
         var history = configuration.FetchSaleHistory;
         if (ImGui.Checkbox(Strings.FetchSaleHistory, ref history))
         {

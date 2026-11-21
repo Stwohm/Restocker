@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
@@ -19,8 +20,6 @@ namespace Restocker.Windows;
 /// </summary>
 public sealed class RepriceTab
 {
-    // Fork: fixed seller tax used for the profit estimate.
-    private const decimal SaleTaxRate = 0.05m;
     private readonly CostLedger costLedger;
     private readonly Configuration configuration;
     private readonly Executor executor;
@@ -32,7 +31,7 @@ public sealed class RepriceTab
     private readonly HashSet<string> reportedBaits = new();
     private string filter = string.Empty;
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
-    private readonly Dictionary<string, long> editedPrice = new();
+    private readonly Dictionary<string, (long Price, bool ClampedToFloor)> editedPrice = new();
     private string? lastMatchSummary;
     /// <summary>明示的に展開したリテイナーセクションの key。デフォルトは折りたたみ。</summary>
     private readonly HashSet<string> expandedSections = new();
@@ -207,6 +206,7 @@ public sealed class RepriceTab
                 UnitPrice = p.NewPrice,
                 ListingIndex = p.ListingIndex,
                 OldPrice = p.OldPrice,
+                Reason = p.ClampedToFloor ? RepriceReason.Floor : RepriceReason.Manual,
             });
         }
         return result;
@@ -351,7 +351,7 @@ public sealed class RepriceTab
             seen.Add((listing.ItemId, listing.IsHQ));
             if (respectHold && configuration.IsHeld(listing.ItemId, listing.IsHQ))
             {
-                editedPrice[EditKey(snap.Key, listing)] = listing.UnitPrice;
+                editedPrice[EditKey(snap.Key, listing)] = (listing.UnitPrice, false);
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' HELD (left at {listing.UnitPrice:N0})");
                 continue;
             }
@@ -364,8 +364,8 @@ public sealed class RepriceTab
                 continue;
             }
             var current = listing.UnitPrice;
-            var decision = RepriceRules.Decide(current, marketCache.GetRaw(listing.ItemId, listing.IsHQ),
-                configuration.FloorFor(listing.ItemId), settings);
+            var floor = configuration.EffectiveFloorFor(listing.ItemId, listing.IsHQ, costLedger);
+            var decision = RepriceRules.Decide(current, marketCache.GetRaw(listing.ItemId, listing.IsHQ), floor.Price, settings);
             var lowest = decision.LowestCompetitor;
             var dropped = BaitFinder.Dropped(marketCache.GetOffers(listing.ItemId, listing.IsHQ), lowest);
             if (dropped.Count > 0)
@@ -376,12 +376,12 @@ public sealed class RepriceTab
             }
             if (lowest <= 0)
             {
-                if (respectHold) editedPrice[EditKey(snap.Key, listing)] = decision.NewPrice;
+                if (respectHold) editedPrice[EditKey(snap.Key, listing)] = (decision.NewPrice, false);
                 Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, no data)");
                 continue;
             }
             var newPrice = decision.NewPrice;
-            editedPrice[EditKey(snap.Key, listing)] = newPrice;
+            editedPrice[EditKey(snap.Key, listing)] = (newPrice, floor.FromCost && decision.Reason == RepriceReason.Floor);
             if (decision.MarkForReview)
                 Plugin.ChatPrint($"{name} [{snap.RetainerName} #{listing.ListingIndex}] {Strings.PriceWarning(decision.Reason, current, newPrice)}");
             applied++;
@@ -402,7 +402,8 @@ public sealed class RepriceTab
         foreach (var listing in snap.Listings)
         {
             var key = EditKey(snap.Key, listing);
-            if (!editedPrice.TryGetValue(key, out var price)) continue;
+            if (!editedPrice.TryGetValue(key, out var edit)) continue;
+            var (price, clampedToFloor) = edit;
             if (price <= 0) continue;
             if (price == listing.UnitPrice) continue; // 同額は積まない
             var name = sheet.TryGetRow(listing.ItemId, out var row) ? row.Name.ExtractText() : $"#{listing.ItemId}";
@@ -417,6 +418,7 @@ public sealed class RepriceTab
                 ListingIndex = listing.ListingIndex,
                 OldPrice = listing.UnitPrice,
                 NewPrice = price,
+                ClampedToFloor = clampedToFloor,
                 Quantity = listing.Quantity,
             });
             added++;
@@ -506,9 +508,9 @@ public sealed class RepriceTab
             DrawUndercutters(l);
             ImGui.TableNextColumn();
             var editKey = EditKey(snap.Key, l);
-            DrawPriceInput(editKey, l.UnitPrice);
+            DrawPriceInput(editKey, l);
             ImGui.TableNextColumn();
-            DrawProfit(l, editedPrice.GetValueOrDefault(editKey));
+            DrawProfit(l, editedPrice.GetValueOrDefault(editKey).Price);
             ImGui.TableNextColumn();
             DrawHoldCheckbox(snap.Key, l);
             ImGui.TableNextColumn();
@@ -574,7 +576,8 @@ public sealed class RepriceTab
     private void DrawProfit(ListingEntry listing, long edited)
     {
         var price = edited > 0 ? edited : listing.UnitPrice;
-        var afterTax = price * (1m - SaleTaxRate);
+        var saleTaxRate = (decimal)configuration.SaleTaxPercent / 100m;
+        var afterTax = price * (1m - saleTaxRate);
         var unitCost = costLedger.CurrentUnitCost(listing.ItemId, listing.IsHQ);
         if (unitCost is { } cost)
         {
@@ -590,7 +593,7 @@ public sealed class RepriceTab
         if (!ImGui.IsItemHovered()) return;
         ImGui.BeginTooltip();
         ImGui.TextUnformatted($"{Strings.CostUnitCost}  {unitCost?.ToString("N2") ?? "-"}");
-        ImGui.TextUnformatted(string.Format(Strings.CostPriceAfterTax, SaleTaxRate, afterTax));
+        ImGui.TextUnformatted(string.Format(Strings.CostPriceAfterTax, saleTaxRate, afterTax));
         ImGui.TextUnformatted($"{Strings.CostWeightedAverage}  {costLedger.WeightedAverageCost(listing.ItemId, listing.IsHQ)?.ToString("N2") ?? "-"}");
         if (unitCost.HasValue)
         {
@@ -720,7 +723,7 @@ public sealed class RepriceTab
     private void DrawFillButton(RetainerSnapshot snap, ListingEntry sourceListing)
     {
         var sourceKey = EditKey(snap.Key, sourceListing);
-        var sourcePrice = editedPrice.GetValueOrDefault(sourceKey, 0);
+        var sourcePrice = editedPrice.GetValueOrDefault(sourceKey).Price;
         var canFill = sourcePrice > 0;
         if (!canFill) ImGui.BeginDisabled();
         if (ImGui.SmallButton($"{Strings.RepriceFillRetainer}##fill-{sourceKey}"))
@@ -728,7 +731,7 @@ public sealed class RepriceTab
             foreach (var l in snap.Listings)
             {
                 if (l.ListingIndex == sourceListing.ListingIndex) continue;
-                editedPrice[EditKey(snap.Key, l)] = sourcePrice;
+                editedPrice[EditKey(snap.Key, l)] = (sourcePrice, false);
             }
             Plugin.Log.Information($"[Restocker] fill: copied {sourcePrice} to {snap.Listings.Count - 1} other listings on {snap.RetainerName}");
         }
@@ -739,28 +742,36 @@ public sealed class RepriceTab
     internal static System.Numerics.Vector4 WarningColor(RepriceReason reason) =>
         reason == RepriceReason.MaxRaise ? new(1f, 0.88f, 0.2f, 1f) : new(1f, 0.55f, 0.2f, 1f);
 
-    private void DrawPriceInput(string key, long current)
+    private void DrawPriceInput(string key, ListingEntry listing)
     {
-        var v = (int)editedPrice.GetValueOrDefault(key, 0);
+        var current = listing.UnitPrice;
+        var v = editedPrice.GetValueOrDefault(key).Price;
         var warning = RepriceRules.LimitExceeded(current, v, configuration.MaxDropPercent, configuration.MaxRaisePercent);
         if (warning.HasValue) ImGui.PushStyleColor(ImGuiCol.Text, WarningColor(warning.Value));
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##price-{key}", ref v, 0))
+        if (ImGui.InputScalar($"##price-{key}", ImGuiDataType.S64, ref v,
+            in Unsafe.NullRef<long>(), in Unsafe.NullRef<long>(), "%lld", ImGuiInputTextFlags.None))
         {
-            if (v < 0) v = 0;
-            editedPrice[key] = v;
+            v = Math.Max(0, v);
+            editedPrice[key] = (v, false);
         }
+        if (warning.HasValue) ImGui.PopStyleColor();
+        if (!ImGui.IsItemHovered()) return;
+
+        var floor = configuration.EffectiveFloorFor(listing.ItemId, listing.IsHQ, costLedger);
+        if (floor.Price <= 0 && !warning.HasValue) return;
+        ImGui.BeginTooltip();
+        if (floor.Price > 0)
+            ImGui.TextUnformatted(string.Format(floor.FromCost ? Strings.CostFloorTooltip : Strings.ManualFloorTooltip, floor.Price));
         if (warning.HasValue)
-        {
-            ImGui.PopStyleColor();
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.PriceWarning(warning.Value, current, v));
-        }
+            ImGui.TextUnformatted(Strings.PriceWarning(warning.Value, current, v));
+        ImGui.EndTooltip();
     }
 
     private void DrawAddPlanButton(RetainerSnapshot snap, ListingEntry l, string name)
     {
         var key = EditKey(snap.Key, l);
-        var price = editedPrice.GetValueOrDefault(key, 0);
+        var (price, clampedToFloor) = editedPrice.GetValueOrDefault(key);
         var canAdd = price > 0 && price != l.UnitPrice;
 
         if (HasPlan(snap.Key, l.ListingIndex))
@@ -784,6 +795,7 @@ public sealed class RepriceTab
                 ListingIndex = l.ListingIndex,
                 OldPrice = l.UnitPrice,
                 NewPrice = price,
+                ClampedToFloor = clampedToFloor,
                 Quantity = l.Quantity,
             });
         }
@@ -854,5 +866,6 @@ internal sealed class RepricePlan
     public int ListingIndex;
     public long OldPrice;
     public long NewPrice;
+    public bool ClampedToFloor;
     public int Quantity;
 }

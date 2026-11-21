@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Restocker.Common;
 using Restocker.Execution;
@@ -134,10 +135,12 @@ public sealed class LowStockTab
             ImGui.TableNextColumn();
             var key = (e.ItemId, e.IsHq);
             if (!restockPrice.TryGetValue(key, out var chosen)) chosen = service.Price(e);
-            var price = (int)Math.Min(chosen, int.MaxValue);
+            var price = chosen;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputInt($"##price-{id}", ref price, 0)) restockPrice[key] = Math.Max(0, price);
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Price for the new listings. Starts at your current listing price.");
+            if (ImGui.InputScalar($"##price-{id}", ImGuiDataType.S64, ref price,
+                in Unsafe.NullRef<long>(), in Unsafe.NullRef<long>(), "%lld", ImGuiInputTextFlags.None))
+                restockPrice[key] = Math.Max(0, price);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Price for the new listings. The default uses your current listing or market price and respects the floor.");
 
             ImGui.TableNextColumn();
             var sug = service.Suggestion(e);
@@ -145,7 +148,7 @@ public sealed class LowStockTab
             {
                 var age = DateTime.UtcNow - s.FetchedUtc;
                 if (ImGui.SmallButton($"Use {s.Price:N0}##use-{id}")) restockPrice[key] = s.Price;
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"market lowest -{configuration.UndercutGil}, fetched {(int)age.TotalMinutes} min ago");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"Market lowest -{configuration.UndercutGil}, subject to the price floor. Fetched {(int)age.TotalMinutes} min ago.");
                 ImGui.SameLine();
                 ImGui.TextDisabled($"{(int)age.TotalMinutes}m");
             }

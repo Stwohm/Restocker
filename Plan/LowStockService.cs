@@ -19,15 +19,17 @@ public sealed class LowStockService : IDisposable
     private readonly Configuration configuration;
     private readonly ListingTracker tracker;
     private readonly MarketCache marketCache;
+    private readonly CostLedger costLedger;
     private readonly Dictionary<(uint, bool), bool> notified = new();
     private DateTime nextCheckUtc = DateTime.MinValue;
 
-    public LowStockService(IFramework framework, Configuration configuration, ListingTracker tracker, MarketCache marketCache)
+    public LowStockService(IFramework framework, Configuration configuration, ListingTracker tracker, MarketCache marketCache, CostLedger costLedger)
     {
         this.framework = framework;
         this.configuration = configuration;
         this.tracker = tracker;
         this.marketCache = marketCache;
+        this.costLedger = costLedger;
         framework.Update += OnUpdate;
     }
 
@@ -100,14 +102,12 @@ public sealed class LowStockService : IDisposable
         return qty > 0 ? qty : 1;
     }
 
-    /// <summary>Entry price, else our current listing price, else market lowest - undercut, else 0.</summary>
+    /// <summary>Entry price, else a floored suggestion from our listing or the market, else 0.</summary>
     public long Price(LowStockEntry e)
     {
         if (e.Price > 0) return e.Price;
         var ours = tracker.ActiveFor(e.ItemId, e.IsHq).Select(r => r.LastPrice).Where(p => p > 0).DefaultIfEmpty(0).Min();
-        if (ours > 0) return ours;
-        var lowest = marketCache.GetLowest(e.ItemId, e.IsHq);
-        return lowest > 0 ? Math.Max(1, lowest - configuration.UndercutGil) : 0;
+        return ours > 0 ? ApplyFloor(e, ours) : MarketSuggestion(e);
     }
 
     public List<PlannedAction> PlanRestock(LowStockEntry e, int targetUnits, long unitPrice)
@@ -141,10 +141,18 @@ public sealed class LowStockService : IDisposable
     {
         var at = marketCache.UpdatedUtc(e.ItemId, e.IsHq);
         if (at == null) return null;
-        var lowest = marketCache.GetLowest(e.ItemId, e.IsHq);
-        if (lowest <= 0) return null;
-        return (Math.Max(1, lowest - configuration.UndercutGil), at.Value);
+        var price = MarketSuggestion(e);
+        return price > 0 ? (price, at.Value) : null;
     }
+
+    private long MarketSuggestion(LowStockEntry e)
+    {
+        var lowest = marketCache.GetLowest(e.ItemId, e.IsHq);
+        return lowest > 0 ? ApplyFloor(e, Math.Max(1, lowest - configuration.UndercutGil)) : 0;
+    }
+
+    private long ApplyFloor(LowStockEntry e, long price) =>
+        Math.Max(price, configuration.EffectiveFloorFor(e.ItemId, e.IsHq, costLedger).Price);
 
     /// <summary>A retainer (of this character) that has the item listed, so its sell list can be used to compare prices.</summary>
     public string? RetainerToCompareFrom(LowStockEntry e)

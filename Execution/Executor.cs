@@ -29,6 +29,7 @@ public sealed unsafe class Executor : IDisposable
     private readonly IPluginLog log;
     private readonly Configuration configuration;
     private readonly Restocker.Market.MarketCache? marketCache;
+    private readonly CostLedger costLedger;
     /// <summary>FetchMarketPrice 完了後に発火するコールバック。RepriceTab が -1ギル を当てる用。</summary>
     public System.Action? OnFetchMarketCompleted;
 
@@ -116,11 +117,12 @@ public sealed unsafe class Executor : IDisposable
     private static readonly TimeSpan SelectStringTimeout = TimeSpan.FromSeconds(4);
     private DateTime? waitingSince;
 
-    public Executor(IFramework framework, IPluginLog log, Configuration configuration, Restocker.Market.MarketCache? marketCache = null)
+    public Executor(IFramework framework, IPluginLog log, Configuration configuration, CostLedger costLedger, Restocker.Market.MarketCache? marketCache = null)
     {
         this.framework = framework;
         this.log = log;
         this.configuration = configuration;
+        this.costLedger = costLedger;
         this.marketCache = marketCache;
         framework.Update += Tick;
     }
@@ -890,7 +892,7 @@ public sealed unsafe class Executor : IDisposable
             (item, hq) => marketCache != null && marketCache.HasDataSince(item, hq, since)
                 ? marketCache.GetOffers(item, hq)
                 : null,
-            configuration.FloorFor,
+            (itemId, hq) => configuration.EffectiveFloorFor(itemId, hq, costLedger).Price,
             configuration.ToRepriceSettings(),
             DateTime.UtcNow,
             configuration.IsHeld);
@@ -1005,6 +1007,14 @@ public sealed unsafe class Executor : IDisposable
                 {
                     currentJobActions.Dequeue();
                     CompletedActions++;
+                    if (action.UnitPrice > uint.MaxValue)
+                    {
+                        log.Warning($"[Restocker] reprice skipped: price {action.UnitPrice:N0} exceeds the market API limit");
+                        RepricesSkipped++;
+                        WriteHistory(action, action.UnitPrice, false, RepriceReason.Error);
+                        Throttle();
+                        return;
+                    }
                     var im = InventoryManager.Instance();
                     if (im == null) { Throttle(); return; }
 
@@ -1026,8 +1036,7 @@ public sealed unsafe class Executor : IDisposable
                     }
                     if (action.OldPrice == 0) action.OldPrice = (long)im->GetRetainerMarketPrice((short)action.ListingIndex);
 
-                    im->SetRetainerMarketPrice((short)action.ListingIndex,
-                        (uint)Math.Min(action.UnitPrice, uint.MaxValue));
+                    im->SetRetainerMarketPrice((short)action.ListingIndex, (uint)action.UnitPrice);
                     log.Information($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} item={action.ItemId} hq={action.IsHQ} {action.OldPrice:N0} -> {action.UnitPrice:N0} ({RepriceRules.ReasonCode(action.Reason)})");
                     RepricesApplied++;
                     AppliedReprices.Add((jobs.Count > jobCursor ? jobs[jobCursor].RetainerName : "?",
@@ -1301,9 +1310,9 @@ public sealed unsafe class Executor : IDisposable
             log.Warning($"[Restocker] ExecuteDirectListing: quantity={action.Quantity} invalid, skipping");
             return false;
         }
-        if (action.UnitPrice <= 0)
+        if (action.UnitPrice <= 0 || action.UnitPrice > uint.MaxValue)
         {
-            log.Warning($"[Restocker] ExecuteDirectListing: unitPrice={action.UnitPrice} invalid, skipping (set price first)");
+            log.Warning($"[Restocker] ExecuteDirectListing: unitPrice={action.UnitPrice} outside the market API range, skipping");
             return false;
         }
 
@@ -1337,7 +1346,7 @@ public sealed unsafe class Executor : IDisposable
                 if (hq != action.IsHQ) continue;
                 if (item->Quantity < action.Quantity) continue;
 
-                var price = (uint)Math.Min(action.UnitPrice, uint.MaxValue);
+                var price = (uint)action.UnitPrice;
                 var srcQtyBefore = item->Quantity;
                 im->MoveToRetainerMarket(
                     t, (ushort)i,

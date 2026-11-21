@@ -21,6 +21,26 @@ public class RepriceRulesTests
     }
 
     [Fact]
+    public void Planner_applies_the_fifo_floor_for_each_quality_and_records_floor_reason()
+    {
+        var now = DateTime.UtcNow;
+        var ledger = new CostLedger();
+        ledger.AddManualLot(1, false, 1, 95m, now);
+        ledger.RecordLot(1, false, 1, 190m, now.AddSeconds(1));
+        ledger.RecordLot(1, true, 1, 114m, now);
+        var listings = new[] { new LiveListing(0, 1, false, 1, 110), new LiveListing(1, 1, true, 1, 110) };
+        var offers = new[] { new MarketOffer(91, "Rival", 1) };
+
+        var plan = AutoRepricePlanner.Plan("k", "R", listings, (_, _) => offers,
+            (item, hq) => BreakEvenFloor.Resolve(0, ledger.CurrentUnitCost(item, hq), 5, 0).Price,
+            Default, now);
+
+        Assert.Collection(plan.Actions,
+            nq => { Assert.Equal(100, nq.UnitPrice); Assert.Equal(RepriceReason.Floor, nq.Reason); },
+            hq => { Assert.Equal(120, hq.UnitPrice); Assert.Equal(RepriceReason.Floor, hq.Reason); });
+    }
+
+    [Fact]
     public void Zero_raise_limit_allows_large_increases()
     {
         var d = RepriceRules.Decide(50_000, new long[] { 75_000 }, 0, new RepriceSettings { MaxRaisePercent = 0 });
@@ -38,7 +58,7 @@ public class RepriceRulesTests
             new MarketOffer(100_000, "D", 1), new MarketOffer(100_000, "E", 1),
         };
         var listings = new[] { new LiveListing(0, 1, false, 1, 14_999), new LiveListing(1, 1, false, 1, 100_000) };
-        var nearby = AutoRepricePlanner.Plan("k", "R", listings[..1], (_, _) => offers, _ => 0, Default, DateTime.UtcNow);
+        var nearby = AutoRepricePlanner.Plan("k", "R", listings[..1], (_, _) => offers, (_, _) => 0, Default, DateTime.UtcNow);
         Assert.Empty(nearby.Baits);
         Assert.Empty(nearby.Actions);
         var unchanged = Assert.Single(nearby.NotApplied);
@@ -46,7 +66,7 @@ public class RepriceRulesTests
         Assert.Equal(14_999, unchanged.NewPrice);
         Assert.Equal(RepriceReason.NoChange, unchanged.Reason);
 
-        var both = AutoRepricePlanner.Plan("k", "R", listings, (_, _) => offers, _ => 0, Default, DateTime.UtcNow);
+        var both = AutoRepricePlanner.Plan("k", "R", listings, (_, _) => offers, (_, _) => 0, Default, DateTime.UtcNow);
         var action = Assert.Single(both.Actions);
         Assert.Equal(RepriceReason.Outlier, action.Reason);
         Assert.Equal(99_997, action.UnitPrice);
@@ -72,7 +92,7 @@ public class RepriceRulesTests
     public void Single_high_offer_records_skipped_raise_and_proposed_price()
     {
         var plan = AutoRepricePlanner.Plan("k", "R", new[] { new LiveListing(0, 1, false, 1, 449_999) },
-            (_, _) => new[] { new MarketOffer(799_999, "A", 1) }, _ => 0, Default, DateTime.UtcNow);
+            (_, _) => new[] { new MarketOffer(799_999, "A", 1) }, (_, _) => 0, Default, DateTime.UtcNow);
         Assert.Empty(plan.Actions);
         var row = Assert.Single(plan.NotApplied);
         Assert.False(row.Applied);
@@ -193,7 +213,7 @@ public class RepriceRulesTests
             (100, true) => new MarketOffer[0],
             _ => null,
         };
-        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
+        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, (_, _) => 0, Default, new System.DateTime(2026, 11, 20));
 
         var a = Assert.Single(r.Actions);
         Assert.Equal(0, a.ListingIndex);
@@ -213,7 +233,7 @@ public class RepriceRulesTests
         var listings = new List<LiveListing> { new(3, 100, true, 1, 99_999) };
         IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(200_000, "Rival", 1) };
 
-        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default,
+        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, (_, _) => 0, Default,
             new System.DateTime(2026, 11, 20), (item, hq) => item == 100 && hq);
 
         Assert.Empty(r.Actions);
@@ -235,7 +255,7 @@ public class RepriceRulesTests
         };
         IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(90_000, "Rival", 1) };
 
-        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, _ => 0, Default,
+        var r = AutoRepricePlanner.Plan("k", "RetainerA", listings, Comp, (_, _) => 0, Default,
             new System.DateTime(2026, 11, 20), (item, hq) => item == 100 && hq);
 
         Assert.Single(r.Actions);
@@ -283,7 +303,7 @@ public class RepriceRulesTests
             new MarketOffer(945, "Izzywizzy", 10),
             new MarketOffer(997, "Mineralprincess", 198),
         };
-        var r = AutoRepricePlanner.Plan("k", "RetainerB", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
+        var r = AutoRepricePlanner.Plan("k", "RetainerB", listings, Comp, (_, _) => 0, Default, new System.DateTime(2026, 11, 20));
         var bait = Assert.Single(r.Baits);
         Assert.Equal(944, bait.RealLowest);
         Assert.Equal("Meowsugar", Assert.Single(bait.Baits).Seller);
@@ -296,7 +316,7 @@ public class RepriceRulesTests
     {
         var listings = new List<LiveListing> { new(0, 1, false, 1, 1_000) };
         IReadOnlyList<MarketOffer>? Comp(uint item, bool hq) => new[] { new MarketOffer(900, "A", 1), new MarketOffer(950, "B", 1) };
-        var r = AutoRepricePlanner.Plan("k", "R", listings, Comp, _ => 0, Default, new System.DateTime(2026, 11, 20));
+        var r = AutoRepricePlanner.Plan("k", "R", listings, Comp, (_, _) => 0, Default, new System.DateTime(2026, 11, 20));
         Assert.Empty(r.Baits);
     }
 

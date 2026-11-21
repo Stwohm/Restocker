@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Configuration;
 using Restocker.Data;
 using Restocker.Localization;
+using Restocker.Market;
 using Restocker.Plan;
 
 namespace Restocker;
@@ -48,6 +49,22 @@ public sealed class Configuration : IPluginConfiguration
     public double MaxDropPercent { get; set; } = 30;
     public double MaxRaisePercent { get; set; } = 30;
 
+    public bool AutoCostFloor { get; set; } = true;
+
+    private double saleTaxPercent = 5;
+    public double SaleTaxPercent
+    {
+        get => saleTaxPercent;
+        set => saleTaxPercent = double.IsNaN(value) ? 5 : Math.Clamp(value, 0, 20);
+    }
+
+    private double minProfitPercent;
+    public double MinProfitPercent
+    {
+        get => minProfitPercent;
+        set => minProfitPercent = double.IsNaN(value) ? 0 : Math.Clamp(value, 0, 500);
+    }
+
     /// <summary>Per-item minimum price (key = item id, HQ and NQ share it). Missing / 0 = no floor.</summary>
     public Dictionary<uint, long> PriceFloors { get; set; } = new();
 
@@ -80,6 +97,10 @@ public sealed class Configuration : IPluginConfiguration
     public List<double> RecentCycleSeconds { get; set; } = new();
 
     public long FloorFor(uint itemId) => PriceFloors.TryGetValue(itemId, out var f) ? f : 0;
+
+    internal (long Price, bool FromCost) EffectiveFloorFor(uint itemId, bool hq, CostLedger ledger) =>
+        BreakEvenFloor.Resolve(FloorFor(itemId), AutoCostFloor ? ledger.CurrentUnitCost(itemId, hq) : null,
+            (decimal)SaleTaxPercent, (decimal)MinProfitPercent);
 
     public bool IsHeld(uint itemId, bool hq) => HeldItems.Contains(HeldKey(itemId, hq));
 

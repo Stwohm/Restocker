@@ -69,7 +69,7 @@ public sealed class Plugin : IDalamudPlugin
         SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
             Tracker.Tracker.ObserveCompetitors(item, hq, offers, DateTime.UtcNow);
-        Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
+        Executor = new Executor(Framework, Log, Configuration, Costs.Ledger, MarketWatcher.Cache);
         Executor.History = new PriceHistoryLog(
             System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "price-history.csv"));
 
@@ -79,7 +79,7 @@ public sealed class Plugin : IDalamudPlugin
             Framework, Condition, ObjectTable, ChatGui, Log, Executor, Configuration,
             () => ArDetector.IsAutoRetainerLoaded(), arIpc);
 
-        LowStock = new Restocker.Plan.LowStockService(Framework, Configuration, Tracker.Tracker, MarketWatcher.Cache);
+        LowStock = new Restocker.Plan.LowStockService(Framework, Configuration, Tracker.Tracker, MarketWatcher.Cache, Costs.Ledger);
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher, AutoCycle, Costs.Ledger);
         WindowSystem.AddWindow(MainWindow);
         ProgressWindow = new ProgressWindow(Executor);
