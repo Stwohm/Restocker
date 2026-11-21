@@ -22,20 +22,48 @@ public class BreakEvenFloorTests
     }
 
     [Theory]
+    [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(125)]
-    public void Uses_the_manual_floor_without_a_cost(long manualFloor)
+    public void Returns_no_floor_without_a_manual_override_or_cost(long manualFloor)
     {
-        Assert.Equal((manualFloor, false), BreakEvenFloor.Resolve(manualFloor, null, 5, 0));
+        Assert.Equal((0L, false), BreakEvenFloor.Resolve(manualFloor, null, 5, 0));
+    }
+
+    [Fact]
+    public void Uses_the_manual_floor_without_a_cost()
+    {
+        Assert.Equal((125L, false), BreakEvenFloor.Resolve(125, null, 5, 0));
     }
 
     [Theory]
-    [InlineData(105, 106, true)]
-    [InlineData(106, 106, false)]
-    [InlineData(125, 125, false)]
-    public void Uses_the_higher_floor_and_reports_its_source(long manualFloor, long expected, bool fromCost)
+    [InlineData(105)]
+    [InlineData(106)]
+    [InlineData(125)]
+    public void A_positive_manual_floor_overrides_cost(long manualFloor)
     {
-        Assert.Equal((expected, fromCost), BreakEvenFloor.Resolve(manualFloor, 100m, 5, 0));
+        Assert.Equal((manualFloor, false), BreakEvenFloor.Resolve(manualFloor, 100m, 5, 0));
+    }
+
+    [Fact]
+    public void Falls_back_to_cost_for_a_negative_legacy_entry()
+    {
+        Assert.Equal((106L, true), BreakEvenFloor.Resolve(-1, 100m, 5, 0));
+    }
+
+    [Theory]
+    [InlineData(125, null, null, false)]
+    [InlineData(0, null, null, false)]
+    [InlineData(0, 0, null, true)]
+    [InlineData(126, 100, null, true)]
+    [InlineData(126, null, 100, true)]
+    [InlineData(126, 100, 95, true)]
+    [InlineData(126, 95, 100, true)]
+    [InlineData(127, 95, 100, false)]
+    [InlineData(128, 100, 95, false)]
+    public void Migration_removes_only_floors_below_the_highest_known_break_even(
+        long manualFloor, int? nqUnitCost, int? hqUnitCost, bool expected)
+    {
+        Assert.Equal(expected, BreakEvenFloor.ShouldRemoveManualFloor(manualFloor, nqUnitCost, hqUnitCost, 5, 20));
     }
 
     [Fact]

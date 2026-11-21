@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -64,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
         Undercuts = new UndercutHistoryHost(MarketWatcher, Configuration, Framework, PlayerState, ObjectTable, Log,
             PluginInterface.GetPluginConfigDirectory());
         Costs = new CostLedgerHost(MarketBoard, Framework, Log, PluginInterface.GetPluginConfigDirectory());
+        MigrateCostFloorOverrides();
         Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory(),
             Configuration, Costs.Ledger.Consume);
         SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
@@ -113,6 +115,26 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
         // 設定タブは MainWindow 内にあるので OpenConfigUi も同じウィンドウへ
         PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUi;
+    }
+
+    private void MigrateCostFloorOverrides()
+    {
+        if (Configuration.CostFloorOverrideMigrated) return;
+
+        var ledger = Costs.Ledger;
+        var saleTax = (decimal)Configuration.SaleTaxPercent;
+        var minProfit = (decimal)Configuration.MinProfitPercent;
+        var obsoleteFloors = Configuration.PriceFloors
+            .Where(entry => BreakEvenFloor.ShouldRemoveManualFloor(entry.Value,
+                ledger.CurrentUnitCost(entry.Key, false), ledger.CurrentUnitCost(entry.Key, true), saleTax, minProfit))
+            .Select(entry => entry.Key)
+            .ToArray();
+        foreach (var itemId in obsoleteFloors)
+            Configuration.PriceFloors.Remove(itemId);
+
+        Configuration.CostFloorOverrideMigrated = true;
+        Configuration.Save();
+        Log.Information($"[Restocky] floor migration: removed {obsoleteFloors.Length} manual floors below cost");
     }
 
     public void Dispose()

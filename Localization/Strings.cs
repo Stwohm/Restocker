@@ -42,6 +42,8 @@ public static class Strings
     // Fork: manual prefill and Apply show the same warning for the proposed change.
     public static string MaxRaiseSetting => T("Max raise % per change (0 = off)", "1回の値上げ上限 %（0で無効）", "Max. Erhöhung pro Änderung in % (0 = aus)", "Hausse maximale par changement en % (0 = désactivé)", "每次涨价上限 %（0 = 关闭）", "1회 가격 인상 한도 % (0 = 끄기)");
     public static string AutoCostFloorSetting => T("Automatic floor from purchase cost", "購入原価から最低価格を自動設定", "Automatischer Mindestpreis aus Einkaufskosten", "Prix plancher automatique selon le coût d’achat", "按购入成本自动设置底价", "구매 원가 기준 자동 최저가");
+    public static string PriceFloorSettings => T("Price floors (manual applies to HQ and NQ, 0 = auto)", "最低価格（手動はHQ・NQ共通、0 = 自動）", "Mindestpreise (manuell für HQ und NQ, 0 = automatisch)", "Prix planchers (manuel pour HQ et NQ, 0 = auto)", "底价（手动值适用于 HQ 和 NQ，0 = 自动）", "최저가 (수동 값은 HQ와 NQ 공통, 0 = 자동)");
+    public static string ResetFloorToAuto => T("Auto", "自動", "Auto", "Auto", "自动", "자동");
     public static string SaleTaxSetting => T("Sales tax %", "販売税率 %", "Verkaufssteuer %", "Taxe sur la vente %", "销售税率 %", "판매세 %");
     public static string MinProfitSetting => T("Minimum profit % of cost", "購入原価に対する最低利益率 %", "Mindestgewinn in % der Kosten", "Bénéfice minimal en % du coût", "最低利润（占成本的百分比）", "원가 대비 최소 이익률 %");
     public static string CostFloorTooltip => T("Floor {0:N0} (cost)", "最低価格 {0:N0}（原価）", "Mindestpreis {0:N0} (Kosten)", "Prix plancher {0:N0} (coût)", "底价 {0:N0}（成本）", "최저가 {0:N0} (원가)");

@@ -50,6 +50,7 @@ public sealed class Configuration : IPluginConfiguration
     public double MaxRaisePercent { get; set; } = 30;
 
     public bool AutoCostFloor { get; set; } = true;
+    public bool CostFloorOverrideMigrated { get; set; }
 
     private double saleTaxPercent = 5;
     public double SaleTaxPercent
@@ -65,7 +66,7 @@ public sealed class Configuration : IPluginConfiguration
         set => minProfitPercent = double.IsNaN(value) ? 0 : Math.Clamp(value, 0, 500);
     }
 
-    /// <summary>Per-item minimum price (key = item id, HQ and NQ share it). Missing / 0 = no floor.</summary>
+    /// <summary>Manual floor by item id, shared by HQ and NQ. Missing or nonpositive entries use the automatic setting.</summary>
     public Dictionary<uint, long> PriceFloors { get; set; } = new();
 
     /// <summary>Automatic-reprice holds, keyed as "itemId:hq" (HQ and NQ are independent).</summary>

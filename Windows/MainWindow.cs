@@ -20,7 +20,9 @@ public sealed class MainWindow : Window, IDisposable
     private readonly CostsTab costsTab;
     private LowStockTab? lowStockTab;
     private readonly MarketCache marketCache;
+    private readonly CostLedger costLedger;
     private readonly ConfirmDialog confirmDialog = new();
+    private (uint ItemId, int Value, int Frame)? activeFloorInput;
 
     public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher, AutoCycleController autoCycle, CostLedger ledger)
         : base($"{Strings.WindowTitle}##MainWindow",
@@ -29,6 +31,7 @@ public sealed class MainWindow : Window, IDisposable
         this.configuration = configuration;
         this.executor = executor;
         this.marketCache = marketWatcher.Cache;
+        this.costLedger = ledger;
         this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache, autoCycle, ledger);
         this.listTab = new ListTab(configuration, executor, confirmDialog);
         this.costsTab = new CostsTab(ledger);
@@ -314,7 +317,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled("Price history: pluginConfigs\\Restocky\\price-history.csv");
 
         ImGui.Spacing();
-        ImGui.TextUnformatted("Price floors (per item, HQ and NQ share it; 0 = none)");
+        ImGui.TextUnformatted(Strings.PriceFloorSettings);
         ImGui.SetNextItemWidth(240);
         ImGui.InputTextWithHint("##floor-filter", Strings.Filter, ref floorFilter, 64);
 
@@ -344,8 +347,12 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Your price", ImGuiTableColumnFlags.WidthFixed, 130);
         ImGui.TableSetupColumn("Market lowest", ImGuiTableColumnFlags.WidthFixed, 130);
-        ImGui.TableSetupColumn("Floor", ImGuiTableColumnFlags.WidthFixed, 120);
+        var autoLabel = Strings.ResetFloorToAuto;
+        var autoButtonSpace = ImGui.CalcTextSize(autoLabel).X + 2 * ImGui.GetStyle().FramePadding.X
+            + ImGui.GetStyle().ItemSpacing.X;
+        ImGui.TableSetupColumn("Floor", ImGuiTableColumnFlags.WidthFixed, 120 + autoButtonSpace);
         ImGui.TableHeadersRow();
+        var frame = ImGui.GetFrameCount();
         foreach (var (id, name) in ids)
         {
             ImGui.TableNextRow();
@@ -363,12 +370,46 @@ public sealed class MainWindow : Window, IDisposable
             if (marketText.Length == 0) ImGui.TextDisabled("not fetched");
             else ImGui.TextUnformatted(marketText);
             ImGui.TableNextColumn();
-            var v = (int)Math.Min(configuration.FloorFor(id), int.MaxValue);
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputInt($"##floor-{id}", ref v, 0))
+            var floor = configuration.EffectiveFloorFor(id, false, costLedger);
+            var hqFloor = configuration.EffectiveFloorFor(id, true, costLedger);
+            if (hqFloor.Price > floor.Price) floor = hqFloor;
+            var isManual = floor.Price > 0 && !floor.FromCost;
+            var source = floor.FromCost ? Strings.CostFloorTooltip : Strings.ManualFloorTooltip;
+
+            // InputInt can only edit 32-bit values. Also show the exact floor if it exceeds that range.
+            var shownValue = (int)Math.Min(floor.Price, int.MaxValue);
+            if (floor.Price > int.MaxValue)
+                ImGui.TextUnformatted(floor.Price.ToString("N0"));
+
+            // ImGui can copy the active text back on an unchanged frame. Preserve the input
+            // value while focused so a changing cost floor cannot be mistaken for a user edit.
+            var inputValue = activeFloorInput is { } active && active.ItemId == id && active.Frame == frame - 1
+                ? active.Value
+                : shownValue;
+            var v = inputValue;
+            ImGui.SetNextItemWidth(isManual ? Math.Max(1, ImGui.GetContentRegionAvail().X - autoButtonSpace) : -1);
+            var edited = ImGui.InputInt($"##floor-{id}", ref v, 0) && v != inputValue;
+            if (ImGui.IsItemActive()) activeFloorInput = (id, v, frame);
+            if (floor.Price > 0 && ImGui.IsItemHovered())
+                ImGui.SetTooltip(string.Format(source, floor.Price));
+
+            if (isManual)
             {
-                if (v <= 0) configuration.PriceFloors.Remove(id);
-                else configuration.PriceFloors[id] = v;
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"{autoLabel}##floor-auto-{id}"))
+                {
+                    v = 0;
+                    edited = true;
+                }
+            }
+
+            if (edited && v > 0)
+            {
+                configuration.PriceFloors[id] = v;
+                configuration.Save();
+            }
+            else if (edited && configuration.PriceFloors.Remove(id))
+            {
                 configuration.Save();
             }
         }
