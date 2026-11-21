@@ -46,6 +46,8 @@ public sealed class Plugin : IDalamudPlugin
     private AutoRetainerDetector ArDetector { get; }
     private Executor Executor { get; }
     private MarketWatcher MarketWatcher { get; }
+    private UndercutHistoryHost Undercuts { get; }
+    internal UndercutHistory UndercutHistory => Undercuts.History;
     private AutoCycleController AutoCycle { get; }
     public TrackerHost Tracker { get; }
     public Restocker.Plan.LowStockService LowStock { get; private set; } = null!;
@@ -57,6 +59,8 @@ public sealed class Plugin : IDalamudPlugin
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         MarketWatcher = new MarketWatcher(MarketBoard, Log);
+        Undercuts = new UndercutHistoryHost(MarketWatcher, Configuration, Framework, PlayerState, ObjectTable, Log,
+            PluginInterface.GetPluginConfigDirectory());
         Tracker = new TrackerHost(Framework, ChatGui, DataManager, Log, PluginInterface.GetPluginConfigDirectory());
         SaleHistory = new RetainerHistoryCapture(Tracker.Tracker);
         MarketWatcher.CompetitorsObserved += (item, hq, offers) =>
@@ -118,6 +122,7 @@ public sealed class Plugin : IDalamudPlugin
         LowStock.Dispose();
         MarketWatcher.Dispose();
         SaleHistory.Dispose();
+        Undercuts.Dispose();
         Tracker.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();

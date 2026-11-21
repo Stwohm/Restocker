@@ -484,17 +484,11 @@ public sealed class RepriceTab
         ImGui.EndTable();
     }
 
-    // Fork: display competitors from the last scan for this item and quality.
+    // Fork: display competitors from the last scan and the past week's most active rivals.
     private void DrawUndercutters(ListingEntry listing)
     {
-        if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
-        {
-            ImGui.TextDisabled("(!)");
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.UndercuttersNoScan);
-            return;
-        }
-
-        var offers = marketCache.GetOffers(listing.ItemId, listing.IsHQ);
+        var updated = marketCache.UpdatedUtc(listing.ItemId, listing.IsHQ);
+        var offers = updated == null ? System.Array.Empty<MarketOffer>() : marketCache.GetOffers(listing.ItemId, listing.IsHQ);
         var price = listing.UnitPrice;
         // The cache sorts by unit price, so the first offer is enough to color the icon.
         if (offers.Count > 0 && offers[0].Price < price)
@@ -505,8 +499,12 @@ public sealed class RepriceTab
         if (!ImGui.IsItemHovered()) return;
 
         ImGui.BeginTooltip();
+        var nowUtc = System.DateTime.UtcNow;
+        var history = Plugin.Instance.UndercutHistory;
         var summary = UndercutSummary.Create(offers, price);
-        if (price == 0)
+        if (updated == null)
+            ImGui.TextUnformatted(Strings.UndercuttersNoScan);
+        else if (price == 0)
             ImGui.TextUnformatted(Strings.UndercuttersUnknownPrice);
         else if (summary.ListingCount == 0)
             ImGui.TextUnformatted(Strings.UndercuttersNone);
@@ -514,11 +512,12 @@ public sealed class RepriceTab
             ImGui.TextUnformatted(string.Format(Strings.UndercuttersHeader, price, summary.ListingCount, summary.UnitCount));
 
         const ImGuiTableFlags flags = ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.NoSavedSettings;
-        if (summary.Offers.Count > 0 && ImGui.BeginTable("##undercutters", 3, flags))
+        if (summary.Offers.Count > 0 && ImGui.BeginTable("##undercutters", 6, flags))
         {
             ImGui.TableSetupColumn(Strings.UndercuttersSeller);
             ImGui.TableSetupColumn(Strings.UndercuttersQuantity);
             ImGui.TableSetupColumn(Strings.UndercuttersUnitPrice);
+            SetupUndercutCountColumns();
             ImGui.TableHeadersRow();
             foreach (var offer in summary.Offers)
             {
@@ -529,19 +528,63 @@ public sealed class RepriceTab
                 ImGui.TextUnformatted(offer.Quantity.ToString("N0"));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(offer.Price.ToString("N0"));
+                DrawUndercutCounts(history.Counts(listing.ItemId, listing.IsHQ, offer.Seller, nowUtc));
             }
             ImGui.EndTable();
         }
 
         if (summary.RemainingCount > 0)
             ImGui.TextUnformatted(string.Format(Strings.UndercuttersMore, summary.RemainingCount));
-        if (marketCache.UpdatedUtc(listing.ItemId, listing.IsHQ) is { } updated)
+        if (updated is { } scannedUtc)
         {
-            var minutes = (System.DateTime.UtcNow - updated).TotalMinutes;
+            var minutes = (nowUtc - scannedUtc).TotalMinutes;
             ImGui.TextDisabled(minutes < 1 ? Strings.UndercuttersScannedNow
                 : string.Format(Strings.UndercuttersScannedMinutes, (int)minutes));
         }
+        var rivals = history.TopRivals(listing.ItemId, listing.IsHQ, nowUtc, 5);
+        if (rivals.Count > 0)
+        {
+            ImGui.Separator();
+            ImGui.TextUnformatted(Strings.UndercuttersMostActiveRivals);
+            if (ImGui.BeginTable("##undercut-rivals", 4, flags))
+            {
+                ImGui.TableSetupColumn(Strings.UndercuttersSeller);
+                SetupUndercutCountColumns();
+                ImGui.TableHeadersRow();
+                foreach (var rival in rivals)
+                {
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(rival.Seller);
+                    DrawUndercutCounts(rival.Counts);
+                }
+                ImGui.EndTable();
+            }
+        }
+        if (summary.Offers.Count > 0 || rivals.Count > 0)
+        {
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 30);
+            ImGui.TextDisabled(Strings.UndercuttersCountHelp);
+            ImGui.PopTextWrapPos();
+        }
         ImGui.EndTooltip();
+    }
+
+    private static void SetupUndercutCountColumns()
+    {
+        ImGui.TableSetupColumn(Strings.UndercuttersLast24h);
+        ImGui.TableSetupColumn(Strings.UndercuttersLast3d);
+        ImGui.TableSetupColumn(Strings.UndercuttersLast7d);
+    }
+
+    private static void DrawUndercutCounts(UndercutCounts counts)
+    {
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(counts.Last24h.ToString("N0"));
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(counts.Last3d.ToString("N0"));
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(counts.Last7d.ToString("N0"));
     }
 
     private void DrawHoldCheckbox(string snapshotKey, ListingEntry listing)

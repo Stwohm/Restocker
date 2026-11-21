@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -26,6 +27,9 @@ public sealed unsafe class MarketWatcher : IDisposable
     /// Args: itemId, isHq, competitor offers ascending.
     /// </summary>
     public event Action<uint, bool, System.Collections.Generic.IReadOnlyList<MarketOffer>>? CompetitorsObserved;
+
+    // Fork: fresh competitor offers from manual and automated searches, grouped by quality.
+    internal event Action<uint, IReadOnlyList<MarketOffer>, IReadOnlyList<MarketOffer>>? OffersUpdated;
 
     /// <summary>同じ検索結果が複数回飛んでくる server エラー時の保護。</summary>
     private int lastRequestId = -1;
@@ -130,6 +134,8 @@ public sealed unsafe class MarketWatcher : IDisposable
                 }
                 catch (Exception ex) { log.Error(ex, "[Restocker] CompetitorsObserved handler threw"); }
             }
+            if (nqPrices.Count != 0 || hqPrices.Count != 0)
+                OffersUpdated?.Invoke(itemId, nqPrices, hqPrices);
 
             dump.Append($"\n  → nq={nqPrices.Count} (lowest {Cache.GetLowest(itemId, false):N0})  hq={hqPrices.Count} (lowest {Cache.GetLowest(itemId, true):N0})");
             log.Information(dump.ToString());
